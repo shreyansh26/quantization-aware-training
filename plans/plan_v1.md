@@ -50,18 +50,27 @@ T2 ──┼── T3 ──┼── T7 ──┘        │
 - **location**: `src/qat/preflight.py`
 - **description**: Add a fail-fast environment checker for CUDA/H100, PyTorch, Transformers, TRL, vLLM, and `compressed-tensors`, and reject unsupported quant pairs before any run starts.
 - **validation**: A preflight command reports pass/fail with explicit reasons; `int4/int8` hard-fails.
+- **status**: Completed
+- **log**: Added a standalone preflight module with explicit PASS/FAIL reporting for Python, package availability, CUDA visibility, H100 selection, and FP8 capability checks. The guard integrates the project quantization matrix and blocks unsupported variants before any expensive work begins.
+- **files edited/created**: `src/qat/preflight.py`, `tests/test_preflight.py`
 
 ### T4: Data pipeline and split manifests
 - **depends_on**: `[T1, T2]`
 - **location**: `src/qat/data.py`
 - **description**: Load `NuminaMath-CoT`, create deterministic source-stratified smoke/full holdouts, use the `messages` field with the model chat template, and generate assistant-only labels. If exact stratification is impossible, cap exhausted sources, redistribute the remainder deterministically by largest deficit, and log the result in a split manifest.
 - **validation**: Split manifests are reproducible from the same seed; unit fixtures confirm assistant-only masking boundaries.
+- **status**: Completed
+- **log**: Implemented deterministic source-stratified split selection from the training pool, a JSON split-manifest writer, and chat-templated training encoding with assistant-only labels. The tokenization path uses the tokenizer-provided assistant mask when available and falls back to prompt-prefix inference when it is not.
+- **files edited/created**: `src/qat/data.py`, `tests/test_data.py`
 
 ### T5: Config, CLI, and run manifests
 - **depends_on**: `[T1, T2]`
 - **location**: `src/qat/config.py`, `src/qat/cli.py`
 - **description**: Define the runtime interface, scheme validator, artifact naming/run-id rules, resume fingerprint, and manifest schema shared by baseline, QAT, eval, smoke, and full runs.
 - **validation**: Invalid configs fail early; manifests serialize and reload cleanly.
+- **status**: Completed
+- **log**: Expanded the config layer into typed split, runtime, training, and manifest dataclasses; added stable run IDs, artifact-directory helpers, resume fingerprints, and variant validation. Added the initial CLI surface for `baseline`, `qat`, `eval`, `smoke`, and `full`, plus targeted tests for config parsing and manifest behavior.
+- **files edited/created**: `src/qat/config.py`, `src/qat/cli.py`, `tests/test_config.py`, `tests/test_cli.py`
 
 ### T6: Baseline training engine
 - **depends_on**: `[T3, T4, T5]`
