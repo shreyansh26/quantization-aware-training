@@ -207,7 +207,15 @@ def encode_messages_for_training(
     assistant_mask = encoded.get("assistant_masks")
     if assistant_mask is None:
         assistant_mask = encoded.get("assistant_tokens_mask")
-    if assistant_mask is None:
+    needs_fallback = assistant_mask is None
+    if (
+        not needs_fallback
+        and messages
+        and messages[-1]["role"] == "assistant"
+        and not any(int(value) for value in assistant_mask)
+    ):
+        needs_fallback = True
+    if needs_fallback:
         assistant_mask = _fallback_assistant_mask(
             tokenizer=tokenizer,
             messages=messages,

@@ -104,18 +104,27 @@ T2 ──┼── T3 ──┼── T7 ──┘        │
 - **location**: `src/qat/export.py`, `src/qat/eval/vllm_runner.py`
 - **description**: Convert trained checkpoints into standalone HF-style artifact directories using a thin `compressed-tensors` adapter, write via temp-dir then atomic rename, run converted-model compile checks, and verify vLLM loadability with greedy decoding.
 - **validation**: Every exported artifact passes completeness checks and can be loaded by vLLM or fails with explicit diagnostics.
+- **status**: Completed
+- **log**: Added a checkpoint-to-artifact exporter with temp-dir staging, completeness verification, manifest persistence, and compressed-tensors metadata attachment for the supported quantization variants. Added a vLLM adapter that builds generation prompts from chat-format rows, lowers GPU memory utilization for shared-GPU loadability checks, and verifies exported artifacts with explicit error capture.
+- **files edited/created**: `src/qat/export.py`, `src/qat/eval/vllm_runner.py`, `tests/test_export.py`, `tests/test_vllm_runner.py`
 
 ### T10: Experiment harness
 - **depends_on**: `[T5, T6, T7, T8, T9]`
 - **location**: `src/qat/runner.py`
 - **description**: Implement matrix orchestration for baseline + supported QAT variants, resume semantics, retries, artifact directory conventions, and metrics/prediction-log append behavior.
 - **validation**: Re-running the same manifest resumes or no-ops safely; changed fingerprints are rejected.
+- **status**: Completed
+- **log**: Implemented the matrix runner, stage-tracked resume logic, split-manifest reuse, metrics dedupe, and CLI wiring for `baseline`, `qat`, `eval`, `smoke`, and `full`. Added a dedicated `train_qat` path so the runner can mirror the baseline training flow without inlining QAT preparation logic.
+- **files edited/created**: `src/qat/runner.py`, `src/qat/train/qat.py`, `src/qat/train/__init__.py`, `src/qat/cli.py`, `tests/test_runner.py`, `tests/test_train_qat.py`, `tests/test_cli.py`
 
 ### T11: Test suite
 - **depends_on**: `[T4, T5, T6, T7, T8, T9]`
 - **location**: `tests/`
 - **description**: Add CPU unit tests for quant math, masking, split reproducibility, config validation, answer equivalence, and artifact manifests; add opt-in GPU integration tests for baseline smoke, QAT prepare/convert, export loadability, compile fallback, and vLLM eval.
 - **validation**: `pytest -q` passes on CPU subsets; GPU-marked tests pass on an allowed H100.
+- **status**: Completed
+- **log**: Expanded the CPU suite with coverage for QAT training, export, vLLM prompt/load wrappers, runner resume behavior, and the assistant-mask fallback fix required by Qwen3 chat templating. Added opt-in GPU integration tests for one-step baseline and QAT export/loadability, and manually validated baseline plus `int8_bf16` tiny smoke paths on GPU 5.
+- **files edited/created**: `tests/test_gpu_integration.py`, `tests/test_data.py`, `tests/test_export.py`, `tests/test_runner.py`, `tests/test_train_qat.py`, `tests/test_vllm_runner.py`, `pyproject.toml`
 
 ### T12: Smoke matrix and promotion gate
 - **depends_on**: `[T10, T11]`

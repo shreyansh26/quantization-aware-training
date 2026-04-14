@@ -9,12 +9,14 @@ description = "Lightweight quantization-aware training for Qwen3-4B."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "datasets>=2.19.1",
+    "compressed-tensors",
+    "datasets>=4.8.4",
     "safetensors>=0.7.0",
     "sympy>=1.14.0",
-    "torch>=2.11.0",
-    "transformers>=5.5.4",
+    "torch==2.10.0",
+    "transformers>=4.56.1,<5",
     "trl>=0.10.1",
+    "vllm>=0.19.0 ; python_full_version < '3.14' and sys_platform == 'linux'",
 ]
 
 [dependency-groups]
@@ -32,6 +34,9 @@ url = "https://download.pytorch.org/whl/cu128"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "gpu: opt-in GPU integration coverage for real train/export/vLLM paths",
+]
 
 [tool.ruff]
 target-version = "py312"

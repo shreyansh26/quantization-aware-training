@@ -31,6 +31,17 @@ class FallbackTokenizer:
         }
 
 
+class ZeroMaskTokenizer:
+    def apply_chat_template(self, messages, **kwargs: object):  # noqa: ANN001
+        if kwargs.get("add_generation_prompt"):
+            return [10, 11]
+        return {
+            "input_ids": [10, 11, 12, 13],
+            "attention_mask": [1, 1, 1, 1],
+            "assistant_masks": [0, 0, 0, 0],
+        }
+
+
 def test_build_split_manifest_is_deterministic() -> None:
     dataset = [
         {"source": "a", "messages": []},
@@ -59,6 +70,18 @@ def test_encode_messages_for_training_builds_assistant_only_labels() -> None:
 def test_encode_messages_for_training_falls_back_without_assistant_mask() -> None:
     encoded = encode_messages_for_training(
         tokenizer=FallbackTokenizer(),
+        messages=[
+            {"role": "user", "content": "solve this"},
+            {"role": "assistant", "content": "answer"},
+        ],
+    )
+    assert encoded["assistant_tokens_mask"] == [0, 0, 1, 1]
+    assert encoded["labels"] == [-100, -100, 12, 13]
+
+
+def test_encode_messages_for_training_replaces_all_zero_assistant_mask() -> None:
+    encoded = encode_messages_for_training(
+        tokenizer=ZeroMaskTokenizer(),
         messages=[
             {"role": "user", "content": "solve this"},
             {"role": "assistant", "content": "answer"},

@@ -9,6 +9,13 @@ from qat.config import (
     default_runtime_config,
     parse_variant,
 )
+from qat.runner import (
+    run_baseline_task,
+    run_eval_task,
+    run_full_task,
+    run_qat_task,
+    run_smoke_task,
+)
 
 Handler = Callable[[RuntimeConfig], int]
 
@@ -23,11 +30,11 @@ def _not_implemented(task_name: str) -> Handler:
 
 
 TASK_HANDLERS: dict[str, Handler] = {
-    "baseline": _not_implemented("baseline"),
-    "qat": _not_implemented("qat"),
-    "eval": _not_implemented("eval"),
-    "smoke": _not_implemented("smoke"),
-    "full": _not_implemented("full"),
+    "baseline": run_baseline_task,
+    "qat": run_qat_task,
+    "eval": run_eval_task,
+    "smoke": run_smoke_task,
+    "full": run_full_task,
 }
 
 
