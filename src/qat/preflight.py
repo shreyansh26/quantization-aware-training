@@ -104,16 +104,19 @@ def check_cuda(variant: QuantizationVariant | None) -> list[PreflightCheck]:
         ]
 
     device_name = torch.cuda.get_device_name(0)
+    major, minor = torch.cuda.get_device_capability(0)
     checks = [
         PreflightCheck(
             name="cuda:device",
-            ok="H100" in device_name.upper(),
-            detail=f"visible cuda:0 -> {device_name}",
+            ok=(major, minor) >= (9, 0),
+            detail=(
+                f"visible cuda:0 -> {device_name}; "
+                f"compute capability {major}.{minor}"
+            ),
         )
     ]
     metadata = get_variant_metadata(variant)
     if _fp8_required(metadata):
-        major, minor = torch.cuda.get_device_capability(0)
         checks.append(
             PreflightCheck(
                 name="cuda:fp8",

@@ -38,7 +38,9 @@ def test_run_preflight_rejects_int4_int8(monkeypatch: pytest.MonkeyPatch) -> Non
     assert any(check.ok for check in checks)
 
 
-def test_run_preflight_requires_h100_for_fp8(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_preflight_requires_capability_90_for_fp8(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(importlib.metadata, "version", lambda _: "1.0.0")
     fake_torch = SimpleNamespace(
         cuda=SimpleNamespace(
@@ -53,6 +55,25 @@ def test_run_preflight_requires_h100_for_fp8(monkeypatch: pytest.MonkeyPatch) ->
     )
     assert any(check.name == "cuda:device" and not check.ok for check in checks)
     assert any(check.name == "cuda:fp8" and not check.ok for check in checks)
+
+
+def test_run_preflight_accepts_non_h100_with_capability_90(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(importlib.metadata, "version", lambda _: "1.0.0")
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            get_device_name=lambda _: "Future Hopper-class GPU",
+            get_device_capability=lambda _: (9, 0),
+        )
+    )
+    monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
+    checks = run_preflight(
+        variant=QuantizationVariant.FP8_FP8,
+    )
+    assert any(check.name == "cuda:device" and check.ok for check in checks)
+    assert any(check.name == "cuda:fp8" and check.ok for check in checks)
 
 
 def test_format_report_contains_pass_and_fail() -> None:
