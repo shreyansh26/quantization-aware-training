@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import gc
 import json
 import shutil
 from dataclasses import dataclass
@@ -337,6 +338,19 @@ def _promote_checkpoint_dir(config: RuntimeConfig, checkpoint_dir: Path) -> None
     shutil.copytree(checkpoint_dir, target)
 
 
+def _release_gpu_memory() -> None:
+    gc.collect()
+    try:
+        import torch
+    except ImportError:
+        return
+    if not torch.cuda.is_available():
+        return
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
+
+
 def run_single(
     config: RuntimeConfig,
     *,
@@ -400,6 +414,7 @@ def run_single(
         compile_status = "resumed"
 
     if not _stage_at_least(existing.stage, RunStage.EVALUATED):
+        _release_gpu_memory()
         loadability = verify_vllm_loadability(artifact_dir, config)
         if not loadability.loaded:
             _write_runner_state(
@@ -408,11 +423,13 @@ def run_single(
                 error=loadability.error,
             )
             raise RuntimeError(loadability.error or "vLLM loadability check failed")
+        _release_gpu_memory()
         evaluation = services.evaluate_model(
             config,
             artifact_dir,
             split_manifest_path,
         )
+        _release_gpu_memory()
         rows_written = 0
         for row in evaluation.metrics_rows:
             rows_written += int(append_metrics_once(metrics_path, row))

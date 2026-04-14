@@ -171,3 +171,65 @@ def test_run_single_skips_retraining_after_trained_state(tmp_path, monkeypatch) 
     assert calls["train"] == 0
     assert calls["export"] == 1
     assert calls["eval"] == 1
+
+
+def test_run_single_releases_gpu_memory_around_vllm_steps(
+    tmp_path,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    config = RuntimeConfig(
+        task="baseline",
+        split=SplitConfig("smoke", 2, 1, 17),
+        artifact_root=tmp_path,
+    )
+    split_manifest = tmp_path / "split.json"
+    split_manifest.write_text(json.dumps({"train_indices": [0], "test_indices": [1]}))
+    calls: list[str] = []
+    manifest = make_manifest(config, split_manifest_path=split_manifest)
+
+    def fake_preflight(config):  # noqa: ANN001, ARG001
+        return None
+
+    def fake_train(config, split_manifest_path, checkpoint_dir):  # noqa: ANN001, ARG001
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    def fake_export(config, checkpoint_dir):  # noqa: ANN001, ARG001
+        artifact_dir = artifact_dir_for_run(config)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        (artifact_dir / "manifest.json").write_text(json.dumps(manifest.to_dict()))
+        return type("ExportResult", (), {"compile_status": "disabled"})()
+
+    def fake_verify(artifact_dir, config):  # noqa: ANN001, ARG001
+        calls.append("verify")
+        return type("Load", (), {"loaded": True, "error": None})()
+
+    def fake_eval(config, artifact_dir, split_manifest_path):  # noqa: ANN001, ARG001
+        calls.append("eval")
+        return EvaluationSummary(
+            decisions=[],
+            metrics_rows=[],
+            prediction_log_path=str(artifact_dir / "predictions.json"),
+        )
+
+    monkeypatch.setattr(
+        "qat.runner.ensure_split_manifest",
+        lambda config: split_manifest,
+    )
+    monkeypatch.setattr(
+        "qat.runner.verify_vllm_loadability",
+        fake_verify,
+    )
+    monkeypatch.setattr(
+        "qat.runner._release_gpu_memory",
+        lambda: calls.append("release"),
+    )
+    services = SimpleNamespace(
+        preflight=fake_preflight,
+        train_baseline=fake_train,
+        train_qat=fake_train,
+        export_model=fake_export,
+        evaluate_model=fake_eval,
+    )
+    result = run_single(config, services=services)
+    assert result.stage == RunStage.COMPLETED
+    assert calls == ["release", "verify", "release", "eval", "release"]
