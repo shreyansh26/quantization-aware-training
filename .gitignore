@@ -1,0 +1,8 @@
+notes/
+ref_*/
+AGENTS.md
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
