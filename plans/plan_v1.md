@@ -41,6 +41,9 @@ T2 ──┼── T3 ──┼── T7 ──┘        │
 - **location**: `src/qat/config.py`, `notes/`
 - **description**: Resolve and record exact HF revisions for `Qwen/Qwen3-4B` and `AI-MO/NuminaMath-CoT`, plus the official supported scheme matrix used for v1.
 - **validation**: Revisions and scheme table are stored in config/docs and referenced by manifests.
+- **status**: Completed
+- **log**: Resolved exact Hugging Face HEAD revisions for the model and dataset, codified the supported and unsupported quantization variants as project constants, and recorded the serving-matrix references plus DeepWiki/reference-repo guidance in `notes/pinned_inputs.md`.
+- **files edited/created**: `notes/pinned_inputs.md`, `src/qat/config.py`
 
 ### T3: Preflight compatibility gate
 - **depends_on**: `[T2]`
