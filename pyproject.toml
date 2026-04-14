@@ -8,7 +8,14 @@ version = "0.1.0"
 description = "Lightweight quantization-aware training for Qwen3-4B."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "datasets>=2.19.1",
+    "safetensors>=0.7.0",
+    "sympy>=1.14.0",
+    "torch>=2.11.0",
+    "transformers>=5.5.4",
+    "trl>=0.10.1",
+]
 
 [dependency-groups]
 dev = [
@@ -18,6 +25,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/qat"]
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu128"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

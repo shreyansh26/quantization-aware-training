@@ -77,18 +77,27 @@ T2 ──┼── T3 ──┼── T7 ──┘        │
 - **location**: `src/qat/train/baseline.py`
 - **description**: Implement the plain PyTorch single-GPU bf16 SFT loop with checkpoint/resume, gradient checkpointing, optimizer/scheduler, deterministic seeding, and optional best-effort training `torch.compile` probe with eager fallback.
 - **validation**: A smoke baseline run trains, resumes safely, and logs stable loss without NaNs.
+- **status**: Completed
+- **log**: Added a self-contained baseline SFT training module with tokenizer/model loading, assistant-only chat-template encoding, optimizer and warmup scheduler setup, compile probing with eager fallback, and checkpoint/manifest persistence. The CPU unit path now exercises checkpoint writes, compile fallback behavior, and a minimal train step without relying on a live CUDA ordinal.
+- **files edited/created**: `src/qat/train/__init__.py`, `src/qat/train/baseline.py`, `tests/test_baseline.py`
 
 ### T7: QAT core
 - **depends_on**: `[T3, T5]`
 - **location**: `src/qat/quantization/`
 - **description**: Implement fake-quant configs/modules and prepare/convert flow for the six supported schemes, targeting transformer-block `Linear` layers only and matching torchao-style canonical granularities.
 - **validation**: Prepare/convert runs on model modules, unsupported schemes fail early, and converted weights match the requested scheme metadata.
+- **status**: Completed
+- **log**: Implemented the QAT spec table, fake-quant helpers for FP8 and integer paths, a `FakeQuantLinear` wrapper, and recursive prepare/convert passes that only rewrite eligible `Linear` layers. The unit tests cover per-token, per-channel, and per-group behavior plus conversion back to eager `Linear` modules.
+- **files edited/created**: `src/qat/quantization/__init__.py`, `src/qat/quantization/qat.py`, `tests/test_qat.py`
 
 ### T8: Evaluator core
 - **depends_on**: `[T4, T5]`
 - **location**: `src/qat/eval/core.py`
 - **description**: Build answer extraction, normalization, boxed-answer handling, SymPy equivalence fallback, reason-coded failures, and dataset-level CSV/prediction-log row creation. SymPy parsing must be exception-safe and bounded.
 - **validation**: Unit tests cover boxed answers, equivalent expressions, malformed outputs, and parser fallbacks.
+- **status**: Completed
+- **log**: Added boxed/final-answer extraction, normalization utilities, a SymPy-backed equivalence check with safe fallbacks, and helpers for dataset-level metrics rows plus per-run prediction logs. The evaluation tests cover exact matches, symbolic equivalence, malformed outputs, and metrics-log serialization.
+- **files edited/created**: `src/qat/eval/__init__.py`, `src/qat/eval/core.py`, `tests/test_eval_core.py`
 
 ### T9: Export and serving path
 - **depends_on**: `[T4, T5, T6, T7]`
