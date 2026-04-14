@@ -148,3 +148,4 @@ CUDA_VISIBLE_DEVICES=5 uv run python -m qat.preflight --variant fp8_fp8
 - `eval` uses the repo’s vLLM evaluation flow, not a separate ad hoc inference script.
 - The eval path currently performs a loadability check before the actual evaluation pass, so the model is loaded twice per eval run.
 - Known FP8 serving failures will surface during the loadability gate before generation starts.
+- QAT uses fake quantization with an explicit straight-through estimator in [`src/qat/quantization/qat.py`](src/qat/quantization/qat.py): the forward pass uses the quantized value while the backward pass flows through the original tensor via `original + (quantized - original).detach()`.
