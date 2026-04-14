@@ -13,6 +13,7 @@ from qat.config import (
 from qat.runner import (
     EvaluationSummary,
     RunStage,
+    _stage_at_least,
     append_metrics_once,
     artifact_dir_for_run,
     build_matrix,
@@ -233,3 +234,9 @@ def test_run_single_releases_gpu_memory_around_vllm_steps(
     result = run_single(config, services=services)
     assert result.stage == RunStage.COMPLETED
     assert calls == ["release", "verify", "release", "eval", "release"]
+
+
+def test_failed_stage_does_not_count_as_progress() -> None:
+    assert not _stage_at_least(RunStage.FAILED, RunStage.TRAINED)
+    assert not _stage_at_least(RunStage.FAILED, RunStage.EXPORTED)
+    assert not _stage_at_least(RunStage.FAILED, RunStage.EVALUATED)

@@ -198,6 +198,8 @@ def _manifest_from_json(path: Path) -> RunManifest:
 def _stage_at_least(stage: RunStage | None, target: RunStage) -> bool:
     if stage is None:
         return False
+    if stage == RunStage.FAILED:
+        return False
     return STAGE_ORDER[stage] >= STAGE_ORDER[target]
 
 
