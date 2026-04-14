@@ -12,6 +12,7 @@ from qat.data import load_numinamath_train_dataset
 from qat.quantization.qat import prepare_model_for_qat
 from qat.train.baseline import (
     BaselineTrainingSummary,
+    TrainerState,
     build_scheduler,
     collate_encoded_examples,
     collect_package_versions,
@@ -47,7 +48,7 @@ def train_qat(
     if config.quantization_variant is None:
         raise ValueError("QAT training requires a quantization variant")
 
-    device = runtime_device(config.gpu_index)
+    device = runtime_device()
     tokenizer = tokenizer or load_baseline_tokenizer(config)
     model = model or load_qat_model(config)
     model = model.to(device)
@@ -70,10 +71,11 @@ def train_qat(
         shuffle=False,
         collate_fn=collate_encoded_examples,
     )
-    total_steps = max_steps or max(
+    steps_per_epoch = max(
         1,
         len(dataloader) // config.training.gradient_accumulation_steps,
     )
+    total_steps = max_steps or max(1, steps_per_epoch * config.training.num_epochs)
     optimizer = AdamW(
         model.parameters(),
         lr=config.training.learning_rate,
@@ -84,20 +86,28 @@ def train_qat(
         total_steps=max(1, total_steps),
         warmup_ratio=config.training.warmup_ratio,
     )
-    state, final_loss = train_one_epoch(
-        model=model,
-        dataloader=dataloader,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        device=device,
-        grad_accumulation_steps=config.training.gradient_accumulation_steps,
-        max_steps=max_steps,
-    )
+    state = TrainerState()
+    final_loss = 0.0
+    for epoch in range(1, config.training.num_epochs + 1):
+        state, final_loss = train_one_epoch(
+            model=model,
+            dataloader=dataloader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device,
+            grad_accumulation_steps=config.training.gradient_accumulation_steps,
+            max_grad_norm=config.training.max_grad_norm,
+            epoch=epoch,
+            start_step=state.step,
+            max_steps=max_steps,
+        )
+        if max_steps is not None and state.step >= max_steps:
+            break
 
     checkpoint_dir = checkpoint_dir or Path("artifacts") / "qat-checkpoint"
     manifest = make_manifest(
         config,
-        split_manifest_path=split_manifest_path,
+        split_manifest_path_value=split_manifest_path,
         package_versions=collect_package_versions(),
         git_sha=git_sha(),
     )

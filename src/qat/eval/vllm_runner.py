@@ -49,7 +49,7 @@ def build_generation_prompts(
 
 
 def _prepare_vllm_env(config: RuntimeConfig) -> None:
-    os.environ.setdefault("CUDA_VISIBLE_DEVICES", str(config.gpu_index))
+    _ = config
     os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
 

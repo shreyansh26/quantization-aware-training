@@ -10,6 +10,7 @@ import torch
 from qat.config import (
     CompilePolicy,
     QuantizationVariant,
+    RunMode,
     RuntimeConfig,
     SplitConfig,
     TrainingConfig,
@@ -30,13 +31,12 @@ pytestmark = pytest.mark.skipif(
 def _tiny_runtime_config(
     artifact_root: Path,
     *,
-    task: str,
+    mode: RunMode,
     variant: QuantizationVariant | None = None,
 ) -> RuntimeConfig:
     return RuntimeConfig(
-        task=task,
         split=SplitConfig(name="smoke", train_size=2, test_size=1, seed=17),
-        gpu_index=0,
+        mode=mode,
         artifact_root=artifact_root,
         compile_policy=CompilePolicy.DISABLED,
         training=TrainingConfig(
@@ -61,7 +61,7 @@ def test_gpu_baseline_export_loadability(tmp_path: Path) -> None:
     work_dir.mkdir(parents=True)
     split_manifest = work_dir / "split.json"
     _write_tiny_split(split_manifest)
-    config = _tiny_runtime_config(tmp_path, task="baseline")
+    config = _tiny_runtime_config(tmp_path, mode=RunMode.BASELINE)
     summary = train_baseline(
         config,
         split_manifest_path=split_manifest,
@@ -87,7 +87,7 @@ def test_gpu_qat_int8_bf16_export_loadability(tmp_path: Path) -> None:
     _write_tiny_split(split_manifest)
     config = _tiny_runtime_config(
         tmp_path,
-        task="qat",
+        mode=RunMode.QAT,
         variant=QuantizationVariant.INT8_BF16,
     )
     summary = train_qat(

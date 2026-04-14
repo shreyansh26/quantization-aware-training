@@ -8,6 +8,7 @@ from torch import nn
 from qat.config import (
     CompilePolicy,
     QuantizationVariant,
+    RunMode,
     RuntimeConfig,
     SplitConfig,
     TrainingConfig,
@@ -68,10 +69,9 @@ def test_train_qat_writes_checkpoint(tmp_path) -> None:  # noqa: ANN001
         {"messages": [{"role": "user", "content": "c"}]},
     ]
     config = RuntimeConfig(
-        task="qat",
         split=SplitConfig(name="smoke", train_size=2, test_size=1, seed=17),
+        mode=RunMode.QAT,
         compile_policy=CompilePolicy.DISABLED,
-        gpu_index=0,
         training=TrainingConfig(
             micro_batch_size=1,
             gradient_accumulation_steps=1,

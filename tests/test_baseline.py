@@ -5,7 +5,13 @@ import json
 import torch
 from torch import nn
 
-from qat.config import CompilePolicy, RuntimeConfig, SplitConfig, TrainingConfig
+from qat.config import (
+    CompilePolicy,
+    RunMode,
+    RuntimeConfig,
+    SplitConfig,
+    TrainingConfig,
+)
 from qat.train.baseline import (
     TrainerState,
     collate_encoded_examples,
@@ -91,10 +97,9 @@ def test_train_baseline_writes_checkpoint(tmp_path) -> None:  # noqa: ANN001
         {"messages": [{"role": "user", "content": "c"}]},
     ]
     config = RuntimeConfig(
-        task="baseline",
         split=SplitConfig(name="smoke", train_size=2, test_size=1, seed=17),
+        mode=RunMode.BASELINE,
         compile_policy=CompilePolicy.DISABLED,
-        gpu_index=0,
         training=TrainingConfig(
             micro_batch_size=1,
             gradient_accumulation_steps=1,

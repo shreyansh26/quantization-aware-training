@@ -5,17 +5,17 @@ import gc
 import json
 import shutil
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from qat.config import (
-    QuantizationVariant,
-    RunManifest,
+    DEFAULT_METRICS_OUTPUT,
     RuntimeConfig,
     artifact_dir_for_run,
-    make_manifest,
-    make_resume_fingerprint,
+    dump_json,
+    launch_config_payload,
+    make_run_id,
+    split_manifest_path,
 )
 from qat.data import (
     build_split_manifest,
@@ -40,92 +40,31 @@ from qat.train import train_baseline
 from qat.train.qat import train_qat
 
 
-class RunStage(StrEnum):
-    PREFLIGHT = "preflight"
-    SPLIT_READY = "split_ready"
-    TRAINED = "trained"
-    EXPORTED = "exported"
-    EVALUATED = "evaluated"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-STAGE_ORDER = {
-    RunStage.PREFLIGHT: 0,
-    RunStage.SPLIT_READY: 1,
-    RunStage.TRAINED: 2,
-    RunStage.EXPORTED: 3,
-    RunStage.EVALUATED: 4,
-    RunStage.COMPLETED: 5,
-    RunStage.FAILED: 6,
-}
-
-
 @dataclass(frozen=True)
-class RunResult:
-    run_id: str
+class TrainResult:
     artifact_dir: str
-    stage: RunStage
+    split_manifest_path: str
+    launch_config_path: str
     compile_status: str
-    metrics_rows_written: int
-    prediction_log_path: str | None
-    resumed: bool
-
-
-@dataclass(frozen=True)
-class ExistingRunState:
-    manifest: RunManifest | None
-    stage: RunStage | None
-    resume_allowed: bool
-    completed: bool
 
 
 @dataclass(frozen=True)
 class EvaluationSummary:
     decisions: list[EvaluationDecision]
-    metrics_rows: list[dict[str, Any]]
+    metrics_row: dict[str, Any]
     prediction_log_path: str
-
-
-@dataclass(frozen=True)
-class RunnerServices:
-    preflight: Callable[[RuntimeConfig], None]
-    train_baseline: Callable[..., Any]
-    train_qat: Callable[..., Any]
-    export_model: Callable[..., Any]
-    evaluate_model: Callable[[RuntimeConfig, Path, Path], EvaluationSummary]
-
-
-def _default_services() -> RunnerServices:
-    return RunnerServices(
-        preflight=_run_preflight_or_raise,
-        train_baseline=train_baseline,
-        train_qat=train_qat,
-        export_model=export_model_artifact,
-        evaluate_model=evaluate_exported_model,
-    )
+    metrics_path: str
 
 
 def _run_preflight_or_raise(config: RuntimeConfig) -> None:
-    checks = run_preflight(
-        gpu_index=config.gpu_index,
-        variant=config.quantization_variant,
-    )
+    checks = run_preflight(variant=config.quantization_variant)
     failures = [check for check in checks if not check.ok]
     if failures:
         raise RuntimeError(format_report(checks))
 
 
-def _split_manifest_filename(config: RuntimeConfig) -> str:
-    revision_prefix = config.dataset_revision[:8]
-    return (
-        f"numinamath_cot-{config.split.name}-seed{config.split.seed}-"
-        f"{revision_prefix}.json"
-    )
-
-
 def ensure_split_manifest(config: RuntimeConfig) -> Path:
-    path = config.artifact_root / "splits" / _split_manifest_filename(config)
+    path = split_manifest_path(config)
     if path.exists():
         return path
     dataset = load_numinamath_train_dataset(revision=config.dataset_revision)
@@ -134,128 +73,41 @@ def ensure_split_manifest(config: RuntimeConfig) -> Path:
     return path
 
 
-def build_matrix(task_config: RuntimeConfig) -> list[RuntimeConfig]:
-    if task_config.task not in {"smoke", "full"}:
-        return [task_config]
-    configs = [
-        RuntimeConfig(
-            task="baseline",
-            split=task_config.split,
-            seed=task_config.seed,
-            gpu_index=task_config.gpu_index,
-            artifact_root=task_config.artifact_root,
-            model_id=task_config.model_id,
-            model_revision=task_config.model_revision,
-            dataset_id=task_config.dataset_id,
-            dataset_revision=task_config.dataset_revision,
-            compile_policy=task_config.compile_policy,
-            training=task_config.training,
-            quantization_variant=None,
-        )
-    ]
-    for variant in QuantizationVariant:
-        configs.append(
-            RuntimeConfig(
-                task="qat",
-                split=task_config.split,
-                seed=task_config.seed,
-                gpu_index=task_config.gpu_index,
-                artifact_root=task_config.artifact_root,
-                model_id=task_config.model_id,
-                model_revision=task_config.model_revision,
-                dataset_id=task_config.dataset_id,
-                dataset_revision=task_config.dataset_revision,
-                compile_policy=task_config.compile_policy,
-                training=task_config.training,
-                quantization_variant=variant,
-            )
-        )
-    return configs
+def _temp_checkpoint_root(config: RuntimeConfig) -> Path:
+    return config.artifact_root / ".tmp" / make_run_id(config)
 
 
-def _work_root_for_run(config: RuntimeConfig) -> Path:
-    return config.artifact_root / ".work" / artifact_dir_for_run(config).name
+def _release_gpu_memory() -> None:
+    gc.collect()
+    try:
+        import torch
+    except ImportError:
+        return
+    if not torch.cuda.is_available():
+        return
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
 
 
-def _runner_state_path(config: RuntimeConfig) -> Path:
-    artifact_dir = artifact_dir_for_run(config)
-    if artifact_dir.exists():
-        return artifact_dir / "runner_state.json"
-    return _work_root_for_run(config) / "runner_state.json"
+def _dump_train_config(config: RuntimeConfig, artifact_dir: Path) -> Path:
+    path = artifact_dir / "train_config.json"
+    dump_json(path, launch_config_payload(config))
+    return path
 
 
-def _work_manifest_path(config: RuntimeConfig) -> Path:
-    return _work_root_for_run(config) / "manifest.json"
-
-
-def _manifest_from_json(path: Path) -> RunManifest:
-    payload = json.loads(path.read_text())
-    field_names = RunManifest.__dataclass_fields__  # type: ignore[attr-defined]
-    manifest_payload = {name: payload[name] for name in field_names}
-    return RunManifest(**manifest_payload)
-
-
-def _stage_at_least(stage: RunStage | None, target: RunStage) -> bool:
-    if stage is None:
-        return False
-    if stage == RunStage.FAILED:
-        return False
-    return STAGE_ORDER[stage] >= STAGE_ORDER[target]
-
-
-def resume_or_validate(config: RuntimeConfig, artifact_dir: Path) -> ExistingRunState:
-    expected = make_resume_fingerprint(config)
-    manifest_path = artifact_dir / "manifest.json"
-    work_manifest_path = _work_manifest_path(config)
-    state_path = _runner_state_path(config)
-
-    manifest: RunManifest | None = None
-    if manifest_path.exists():
-        manifest = _manifest_from_json(manifest_path)
-    elif work_manifest_path.exists():
-        manifest = _manifest_from_json(work_manifest_path)
-
-    stage = None
-    if state_path.exists():
-        payload = json.loads(state_path.read_text())
-        stage = RunStage(payload["stage"])
-    if manifest is None:
-        return ExistingRunState(
-            manifest=None,
-            stage=stage,
-            resume_allowed=True,
-            completed=False,
-        )
-    if manifest.resume_fingerprint != expected:
-        raise ValueError(
-            f"resume fingerprint mismatch for {artifact_dir.name}: "
-            f"{manifest.resume_fingerprint} != {expected}"
-        )
-    completed = stage == RunStage.COMPLETED
-    return ExistingRunState(
-        manifest=manifest,
-        stage=stage,
-        resume_allowed=True,
-        completed=completed,
-    )
-
-
-def _write_runner_state(
+def _dump_eval_config(
     config: RuntimeConfig,
     *,
-    stage: RunStage,
-    error: str | None = None,
-    prediction_log_path: str | None = None,
-) -> None:
-    path = _runner_state_path(config)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "stage": stage.value,
-        "error": error,
-        "prediction_log_path": prediction_log_path,
-        "resume_fingerprint": make_resume_fingerprint(config),
-    }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    output_path: Path,
+    model_path: Path,
+) -> Path:
+    path = output_path.parent / f"eval_config_{model_path.name}.json"
+    payload = launch_config_payload(config)
+    payload["model_path"] = str(model_path)
+    payload["output_path"] = str(output_path)
+    dump_json(path, payload)
+    return path
 
 
 def append_metrics_once(metrics_path: Path, row: dict[str, Any]) -> bool:
@@ -281,14 +133,20 @@ def _reference_answer(row: dict[str, Any]) -> str:
     raise ValueError("evaluation row is missing a terminal assistant message")
 
 
+def _prediction_log_path(output_path: Path, model_path: Path) -> Path:
+    return output_path.parent / f"predictions_{model_path.name}.json"
+
+
 def evaluate_exported_model(
     config: RuntimeConfig,
+    *,
     artifact_dir: Path,
-    split_manifest_path: Path,
+    split_manifest: Path,
+    output_path: Path = DEFAULT_METRICS_OUTPUT,
 ) -> EvaluationSummary:
     from transformers import AutoTokenizer
 
-    split_payload = json.loads(split_manifest_path.read_text())
+    split_payload = json.loads(split_manifest.read_text())
     dataset = load_numinamath_train_dataset(revision=config.dataset_revision)
     rows = [dataset[int(index)] for index in split_payload["test_indices"]]
     tokenizer = AutoTokenizer.from_pretrained(artifact_dir)
@@ -306,207 +164,90 @@ def evaluate_exported_model(
                 _reference_answer(row),
             )
         )
-    prediction_log_path = artifact_dir / "predictions_numinamath_cot.json"
-    write_prediction_log(prediction_log_path, decisions)
+    prediction_log = _prediction_log_path(output_path, artifact_dir)
+    write_prediction_log(prediction_log, decisions)
     accuracy = sum(decision.is_correct for decision in decisions) / max(
         1,
         len(decisions),
     )
-    metrics_rows = [
-        make_metrics_row(
-            model_name=config.model_id,
-            quantization_artifact=artifact_dir.name,
-            variant=config.quantization_variant,
-            metric_name="accuracy",
-            metric_value=accuracy,
-        )
-    ]
+    metrics_row = make_metrics_row(
+        model_name=config.model_id,
+        quantization_artifact=artifact_dir.name,
+        variant=config.quantization_variant,
+        metric_name="accuracy",
+        metric_value=accuracy,
+    )
+    append_metrics_once(output_path, metrics_row)
+    _dump_eval_config(config, output_path=output_path, model_path=artifact_dir)
     return EvaluationSummary(
         decisions=decisions,
-        metrics_rows=metrics_rows,
-        prediction_log_path=str(prediction_log_path),
+        metrics_row=metrics_row,
+        prediction_log_path=str(prediction_log),
+        metrics_path=str(output_path),
     )
 
 
-def _stage_from_result(result: RunResult) -> RunStage:
-    return result.stage
+def train_and_export(config: RuntimeConfig) -> TrainResult:
+    _run_preflight_or_raise(config)
+    split_manifest = ensure_split_manifest(config)
+    checkpoint_root = _temp_checkpoint_root(config)
+    checkpoint_dir = checkpoint_root / "checkpoint"
+    trainer = train_baseline if config.mode.value == "baseline" else train_qat
 
-
-def _promote_checkpoint_dir(config: RuntimeConfig, checkpoint_dir: Path) -> None:
-    target = artifact_dir_for_run(config) / "_work" / "checkpoint"
-    if target.exists():
-        shutil.rmtree(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(checkpoint_dir, target)
-
-
-def _release_gpu_memory() -> None:
-    gc.collect()
     try:
-        import torch
-    except ImportError:
-        return
-    if not torch.cuda.is_available():
-        return
-    torch.cuda.synchronize()
-    torch.cuda.empty_cache()
-    torch.cuda.ipc_collect()
-
-
-def run_single(
-    config: RuntimeConfig,
-    *,
-    services: RunnerServices | None = None,
-) -> RunResult:
-    if config.task not in {"baseline", "qat"}:
-        raise ValueError(
-            f"run_single only supports baseline/qat tasks, not {config.task}"
-        )
-
-    services = services or _default_services()
-    artifact_dir = artifact_dir_for_run(config)
-    work_root = _work_root_for_run(config)
-    checkpoint_dir = work_root / "checkpoint"
-    metrics_path = config.artifact_root / "metrics_numinamath_cot.csv"
-
-    existing = resume_or_validate(config, artifact_dir)
-    if existing.completed:
-        return RunResult(
-            run_id=artifact_dir.name,
-            artifact_dir=str(artifact_dir),
-            stage=RunStage.COMPLETED,
-            compile_status="completed",
-            metrics_rows_written=0,
-            prediction_log_path=None,
-            resumed=True,
-        )
-
-    split_manifest_path = ensure_split_manifest(config)
-    work_root.mkdir(parents=True, exist_ok=True)
-    manifest = make_manifest(config, split_manifest_path=split_manifest_path)
-    _work_manifest_path(config).write_text(
-        json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n"
-    )
-    _write_runner_state(config, stage=RunStage.SPLIT_READY)
-    services.preflight(config)
-    _write_runner_state(config, stage=RunStage.PREFLIGHT)
-
-    if not _stage_at_least(existing.stage, RunStage.TRAINED):
-        trainer = (
-            services.train_baseline
-            if config.task == "baseline"
-            else services.train_qat
-        )
         trainer(
             config,
-            split_manifest_path=split_manifest_path,
+            split_manifest_path=split_manifest,
             checkpoint_dir=checkpoint_dir,
         )
-        _write_runner_state(config, stage=RunStage.TRAINED)
-
-    if not _stage_at_least(existing.stage, RunStage.EXPORTED):
-        export_result = services.export_model(
+        _release_gpu_memory()
+        export_result = export_model_artifact(
             config,
             checkpoint_dir=checkpoint_dir,
         )
-        _promote_checkpoint_dir(config, checkpoint_dir)
-        _write_runner_state(config, stage=RunStage.EXPORTED)
-        compile_status = export_result.compile_status
-    else:
-        compile_status = "resumed"
+    finally:
+        _release_gpu_memory()
+        shutil.rmtree(checkpoint_root, ignore_errors=True)
 
-    if not _stage_at_least(existing.stage, RunStage.EVALUATED):
-        _release_gpu_memory()
-        loadability = verify_vllm_loadability(artifact_dir, config)
-        if not loadability.loaded:
-            _write_runner_state(
-                config,
-                stage=RunStage.FAILED,
-                error=loadability.error,
-            )
-            raise RuntimeError(loadability.error or "vLLM loadability check failed")
-        _release_gpu_memory()
-        evaluation = services.evaluate_model(
-            config,
-            artifact_dir,
-            split_manifest_path,
-        )
-        _release_gpu_memory()
-        rows_written = 0
-        for row in evaluation.metrics_rows:
-            rows_written += int(append_metrics_once(metrics_path, row))
-        _write_runner_state(
-            config,
-            stage=RunStage.EVALUATED,
-            prediction_log_path=evaluation.prediction_log_path,
-        )
-        _write_runner_state(
-            config,
-            stage=RunStage.COMPLETED,
-            prediction_log_path=evaluation.prediction_log_path,
-        )
-        return RunResult(
-            run_id=artifact_dir.name,
-            artifact_dir=str(artifact_dir),
-            stage=RunStage.COMPLETED,
-            compile_status=compile_status,
-            metrics_rows_written=rows_written,
-            prediction_log_path=evaluation.prediction_log_path,
-            resumed=existing.stage is not None,
-        )
-
-    return RunResult(
-        run_id=artifact_dir.name,
+    artifact_dir = Path(export_result.artifact_dir)
+    launch_config_path = _dump_train_config(config, artifact_dir)
+    return TrainResult(
         artifact_dir=str(artifact_dir),
-        stage=RunStage.COMPLETED,
-        compile_status=compile_status,
-        metrics_rows_written=0,
-        prediction_log_path=None,
-        resumed=True,
+        split_manifest_path=str(split_manifest),
+        launch_config_path=str(launch_config_path),
+        compile_status=export_result.compile_status,
     )
 
 
-def _config_for_eval_target(config: RuntimeConfig) -> RuntimeConfig:
-    return RuntimeConfig(
-        task="qat" if config.quantization_variant is not None else "baseline",
-        split=config.split,
-        seed=config.seed,
-        gpu_index=config.gpu_index,
-        artifact_root=config.artifact_root,
-        model_id=config.model_id,
-        model_revision=config.model_revision,
-        dataset_id=config.dataset_id,
-        dataset_revision=config.dataset_revision,
-        compile_policy=config.compile_policy,
-        training=config.training,
-        quantization_variant=config.quantization_variant,
+def resolve_model_path(
+    config: RuntimeConfig,
+    *,
+    model_path: str | Path | None = None,
+) -> Path:
+    if model_path is not None:
+        return Path(model_path)
+    return artifact_dir_for_run(config)
+
+
+def evaluate_model(
+    config: RuntimeConfig,
+    *,
+    model_path: str | Path | None = None,
+    output_path: str | Path = DEFAULT_METRICS_OUTPUT,
+) -> EvaluationSummary:
+    artifact_dir = resolve_model_path(config, model_path=model_path)
+    if not artifact_dir.exists():
+        raise FileNotFoundError(f"model path does not exist: {artifact_dir}")
+    _run_preflight_or_raise(config)
+    split_manifest = ensure_split_manifest(config)
+    _release_gpu_memory()
+    loadability = verify_vllm_loadability(artifact_dir, config)
+    if not loadability.loaded:
+        raise RuntimeError(loadability.error or "vLLM loadability check failed")
+    _release_gpu_memory()
+    return evaluate_exported_model(
+        config,
+        artifact_dir=artifact_dir,
+        split_manifest=split_manifest,
+        output_path=Path(output_path),
     )
-
-
-def run_baseline_task(config: RuntimeConfig) -> int:
-    run_single(config)
-    return 0
-
-
-def run_qat_task(config: RuntimeConfig) -> int:
-    run_single(config)
-    return 0
-
-
-def run_eval_task(config: RuntimeConfig) -> int:
-    run_single(_config_for_eval_target(config))
-    return 0
-
-
-def _run_matrix(config: RuntimeConfig) -> int:
-    for child in build_matrix(config):
-        run_single(child)
-    return 0
-
-
-def run_smoke_task(config: RuntimeConfig) -> int:
-    return _run_matrix(config)
-
-
-def run_full_task(config: RuntimeConfig) -> int:
-    return _run_matrix(config)

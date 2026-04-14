@@ -308,7 +308,7 @@ def export_model_artifact(
         compile_status = probe_exported_model_compile(temp_dir, config)
         manifest = source_manifest or RunManifest(
             run_id=artifact_dir.name,
-            task=config.task,
+            mode=config.mode.value,
             split_name=config.split.name,
             quantization_variant=(
                 config.quantization_variant.value
@@ -323,8 +323,6 @@ def export_model_artifact(
             artifact_dir=str(artifact_dir),
             compile_policy=config.compile_policy.value,
             seed=config.seed,
-            gpu_index=config.gpu_index,
-            resume_fingerprint="",
         )
         _write_export_manifest(
             temp_dir,

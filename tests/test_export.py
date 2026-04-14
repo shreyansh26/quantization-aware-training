@@ -4,7 +4,7 @@ import json
 
 from torch import nn
 
-from qat.config import CompilePolicy, RuntimeConfig, SplitConfig
+from qat.config import CompilePolicy, RunMode, RuntimeConfig, SplitConfig
 from qat.export import (
     export_model_artifact,
     load_checkpoint_manifest,
@@ -46,7 +46,7 @@ def test_load_checkpoint_manifest_round_trips(tmp_path) -> None:
     checkpoint_dir.mkdir()
     payload = {
         "run_id": "demo",
-        "task": "baseline",
+        "mode": "baseline",
         "split_name": "smoke",
         "quantization_variant": None,
         "model_id": "demo/model",
@@ -57,22 +57,20 @@ def test_load_checkpoint_manifest_round_trips(tmp_path) -> None:
         "artifact_dir": str(tmp_path / "artifact"),
         "compile_policy": "disabled",
         "seed": 17,
-        "gpu_index": 5,
         "package_versions": {},
         "git_sha": None,
         "created_at": "2026-01-01T00:00:00+00:00",
-        "resume_fingerprint": "abc",
     }
     (checkpoint_dir / "manifest.json").write_text(json.dumps(payload))
     manifest = load_checkpoint_manifest(checkpoint_dir)
     assert manifest.run_id == "demo"
-    assert manifest.resume_fingerprint == "abc"
+    assert manifest.mode == "baseline"
 
 
 def test_export_model_artifact_writes_final_directory(tmp_path, monkeypatch) -> None:  # noqa: ANN001
     config = RuntimeConfig(
-        task="baseline",
         split=SplitConfig(name="smoke", train_size=2, test_size=1, seed=17),
+        mode=RunMode.BASELINE,
         artifact_root=tmp_path,
         compile_policy=CompilePolicy.DISABLED,
     )

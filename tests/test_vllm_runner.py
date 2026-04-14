@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import types
 
-from qat.config import RuntimeConfig, SplitConfig
+from qat.config import RunMode, RuntimeConfig, SplitConfig
 from qat.eval.vllm_runner import (
     build_generation_prompts,
     generate_with_vllm,
@@ -42,7 +42,10 @@ def test_verify_vllm_loadability_surfaces_errors(tmp_path, monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "vllm", types.SimpleNamespace(LLM=BrokenLLM))
     result = verify_vllm_loadability(
         tmp_path,
-        RuntimeConfig(task="baseline", split=SplitConfig("smoke", 2, 1, 17)),
+        RuntimeConfig(
+            split=SplitConfig("smoke", 2, 1, 17),
+            mode=RunMode.BASELINE,
+        ),
     )
     assert not result.loaded
     assert "RuntimeError" in (result.error or "")
@@ -73,7 +76,10 @@ def test_generate_with_vllm_uses_fake_module(tmp_path, monkeypatch) -> None:  # 
     outputs = generate_with_vllm(
         tmp_path,
         prompts=["hello"],
-        config=RuntimeConfig(task="baseline", split=SplitConfig("smoke", 2, 1, 17)),
+        config=RuntimeConfig(
+            split=SplitConfig("smoke", 2, 1, 17),
+            mode=RunMode.BASELINE,
+        ),
         max_new_tokens=8,
     )
     assert outputs[0].prediction_text == "answer:hello"

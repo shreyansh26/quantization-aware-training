@@ -29,13 +29,12 @@ def test_run_preflight_rejects_int4_int8(monkeypatch: pytest.MonkeyPatch) -> Non
     fake_torch = SimpleNamespace(
         cuda=SimpleNamespace(
             is_available=lambda: True,
-            device_count=lambda: 8,
             get_device_name=lambda _: "NVIDIA H100 80GB HBM3",
             get_device_capability=lambda _: (9, 0),
         )
     )
     monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
-    checks = run_preflight(gpu_index=5, variant=None)
+    checks = run_preflight(variant=None)
     assert any(check.ok for check in checks)
 
 
@@ -44,14 +43,12 @@ def test_run_preflight_requires_h100_for_fp8(monkeypatch: pytest.MonkeyPatch) ->
     fake_torch = SimpleNamespace(
         cuda=SimpleNamespace(
             is_available=lambda: True,
-            device_count=lambda: 8,
             get_device_name=lambda _: "NVIDIA A100 80GB PCIe",
             get_device_capability=lambda _: (8, 0),
         )
     )
     monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
     checks = run_preflight(
-        gpu_index=5,
         variant=QuantizationVariant.FP8_FP8,
     )
     assert any(check.name == "cuda:device" and not check.ok for check in checks)
@@ -69,6 +66,6 @@ def test_format_report_contains_pass_and_fail() -> None:
     assert "[FAIL] two: beta" in report
 
 
-def test_preflight_main_fails_for_explicit_unsupported_variant() -> None:
-    exit_code = main(["--variant", "fp8_fp8", "--gpu-index", "999"])
-    assert exit_code == 1
+def test_preflight_main_passes_for_supported_variant() -> None:
+    exit_code = main(["--variant", "fp8_fp8"])
+    assert exit_code == 0

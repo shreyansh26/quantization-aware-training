@@ -39,9 +39,9 @@ class BaselineTrainingSummary:
     final_loss: float
 
 
-def runtime_device(gpu_index: int) -> torch.device:
+def runtime_device() -> torch.device:
     if torch.cuda.is_available():
-        return torch.device(f"cuda:{gpu_index}")
+        return torch.device("cuda")
     return torch.device("cpu")
 
 
@@ -228,6 +228,8 @@ def train_one_epoch(
     scheduler: LambdaLR,
     device: torch.device,
     grad_accumulation_steps: int,
+    max_grad_norm: float,
+    epoch: int,
     start_step: int = 0,
     max_steps: int | None = None,
 ) -> tuple[TrainerState, float]:
@@ -247,7 +249,7 @@ def train_one_epoch(
         if should_step:
             torch.nn.utils.clip_grad_norm_(
                 model.parameters(),
-                max_norm=1.0,
+                max_norm=max_grad_norm,
             )
             optimizer.step()
             scheduler.step()
@@ -256,7 +258,7 @@ def train_one_epoch(
             if max_steps is not None and step >= max_steps:
                 break
     final_loss = losses[-1] if losses else 0.0
-    return TrainerState(epoch=1, step=step, optimizer_step=step), final_loss
+    return TrainerState(epoch=epoch, step=step, optimizer_step=step), final_loss
 
 
 def train_baseline(
@@ -270,7 +272,7 @@ def train_baseline(
     tokenizer: Any | None = None,
     dataset: Any | None = None,
 ) -> BaselineTrainingSummary:
-    device = runtime_device(config.gpu_index)
+    device = runtime_device()
     tokenizer = tokenizer or load_baseline_tokenizer(config)
     model = model or load_baseline_model(config)
     model = model.to(device)
@@ -293,10 +295,11 @@ def train_baseline(
         shuffle=False,
         collate_fn=collate_encoded_examples,
     )
-    total_steps = max_steps or max(
+    steps_per_epoch = max(
         1,
         len(dataloader) // config.training.gradient_accumulation_steps,
     )
+    total_steps = max_steps or max(1, steps_per_epoch * config.training.num_epochs)
     optimizer = AdamW(
         model.parameters(),
         lr=config.training.learning_rate,
@@ -307,20 +310,28 @@ def train_baseline(
         total_steps=max(1, total_steps),
         warmup_ratio=config.training.warmup_ratio,
     )
-    state, final_loss = train_one_epoch(
-        model=model,
-        dataloader=dataloader,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        device=device,
-        grad_accumulation_steps=config.training.gradient_accumulation_steps,
-        max_steps=max_steps,
-    )
+    state = TrainerState()
+    final_loss = 0.0
+    for epoch in range(1, config.training.num_epochs + 1):
+        state, final_loss = train_one_epoch(
+            model=model,
+            dataloader=dataloader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device,
+            grad_accumulation_steps=config.training.gradient_accumulation_steps,
+            max_grad_norm=config.training.max_grad_norm,
+            epoch=epoch,
+            start_step=state.step,
+            max_steps=max_steps,
+        )
+        if max_steps is not None and state.step >= max_steps:
+            break
 
     checkpoint_dir = checkpoint_dir or Path("artifacts") / "baseline-checkpoint"
     manifest = make_manifest(
         config,
-        split_manifest_path=split_manifest_path,
+        split_manifest_path_value=split_manifest_path,
         package_versions=collect_package_versions(),
         git_sha=git_sha(),
     )

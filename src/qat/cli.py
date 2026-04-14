@@ -1,101 +1,114 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
 
 from qat.config import (
-    CompilePolicy,
+    DEFAULT_METRICS_OUTPUT,
+    RunMode,
     RuntimeConfig,
-    default_runtime_config,
+    TrainingConfig,
+    get_split_config,
     parse_variant,
 )
-from qat.runner import (
-    run_baseline_task,
-    run_eval_task,
-    run_full_task,
-    run_qat_task,
-    run_smoke_task,
-)
-
-Handler = Callable[[RuntimeConfig], int]
+from qat.runner import evaluate_model, train_and_export
 
 
-def _not_implemented(task_name: str) -> Handler:
-    def _runner(config: RuntimeConfig) -> int:
-        raise NotImplementedError(
-            f"Task '{task_name}' is not wired yet. Config: {config}"
-        )
-
-    return _runner
-
-
-TASK_HANDLERS: dict[str, Handler] = {
-    "baseline": run_baseline_task,
-    "qat": run_qat_task,
-    "eval": run_eval_task,
-    "smoke": run_smoke_task,
-    "full": run_full_task,
-}
-
-
-def _default_split_for_task(task_name: str) -> str:
-    if task_name == "full":
-        return "full"
-    return "smoke"
+def _add_common_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--type",
+        required=True,
+        choices=("smoke", "full"),
+        help="Named data split to use.",
+    )
+    parser.add_argument(
+        "--mode",
+        required=True,
+        choices=(RunMode.BASELINE.value, RunMode.QAT.value),
+        help="Run baseline or qat mode.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=17,
+        help="Seed used for split generation and run naming.",
+    )
+    parser.add_argument(
+        "--quantization-variant",
+        default=None,
+        help="Required for qat mode. Omit for baseline mode.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m qat.cli")
     subparsers = parser.add_subparsers(dest="task", required=True)
-    for task_name in TASK_HANDLERS:
-        task_parser = subparsers.add_parser(task_name)
-        task_parser.add_argument(
-            "--variant",
-            default=None,
-            help="Quantization variant, e.g. int8_bf16. Omit for baseline-style runs.",
-        )
-        task_parser.add_argument(
-            "--split",
-            default=_default_split_for_task(task_name),
-            choices=("smoke", "full"),
-            help="Named data split to use.",
-        )
-        task_parser.add_argument(
-            "--seed",
-            type=int,
-            default=17,
-            help="Global run seed used for split generation and runtime determinism.",
-        )
-        task_parser.add_argument(
-            "--gpu-index",
-            type=int,
-            default=5,
-            help="Physical GPU index to target for single-GPU runs.",
-        )
-        task_parser.add_argument(
-            "--compile-policy",
-            default=CompilePolicy.TRY.value,
-            choices=tuple(policy.value for policy in CompilePolicy),
-            help="Compile policy for eager/try/required execution modes.",
-        )
+
+    train_parser = subparsers.add_parser("train")
+    _add_common_args(train_parser)
+    train_parser.add_argument(
+        "--training.learning-rate",
+        dest="training_learning_rate",
+        type=float,
+        default=2e-5,
+    )
+    train_parser.add_argument(
+        "--training.weight-decay",
+        dest="training_weight_decay",
+        type=float,
+        default=0.01,
+    )
+    train_parser.add_argument(
+        "--training.warmup-ratio",
+        dest="training_warmup_ratio",
+        type=float,
+        default=0.03,
+    )
+    train_parser.add_argument(
+        "--training.max-grad-norm",
+        dest="training_max_grad_norm",
+        type=float,
+        default=1.0,
+    )
+    train_parser.add_argument(
+        "--training.num-epochs",
+        dest="training_num_epochs",
+        type=int,
+        default=1,
+    )
+
+    eval_parser = subparsers.add_parser("eval")
+    _add_common_args(eval_parser)
+    eval_parser.add_argument(
+        "--model-path",
+        default=None,
+        help=(
+            "Explicit trained model path. Overrides path resolution from "
+            "mode/type/seed/variant."
+        ),
+    )
+    eval_parser.add_argument(
+        "--output-path",
+        default=str(DEFAULT_METRICS_OUTPUT),
+        help="Metrics CSV path. Predictions are written next to it.",
+    )
     return parser
 
 
-def config_from_args(args: argparse.Namespace) -> RuntimeConfig:
-    config = default_runtime_config(args.task, split_name=args.split)
-    variant = parse_variant(args.variant)
+def _runtime_config_from_args(args: argparse.Namespace) -> RuntimeConfig:
+    mode = RunMode(args.mode)
+    variant = parse_variant(args.quantization_variant)
+    training = TrainingConfig(
+        learning_rate=getattr(args, "training_learning_rate", 2e-5),
+        weight_decay=getattr(args, "training_weight_decay", 0.01),
+        warmup_ratio=getattr(args, "training_warmup_ratio", 0.03),
+        max_grad_norm=getattr(args, "training_max_grad_norm", 1.0),
+        num_epochs=getattr(args, "training_num_epochs", 1),
+    )
     return RuntimeConfig(
-        task=config.task,
-        split=config.split,
+        split=get_split_config(args.type, seed=args.seed),
+        mode=mode,
         seed=args.seed,
-        gpu_index=args.gpu_index,
-        artifact_root=config.artifact_root,
-        model_id=config.model_id,
-        model_revision=config.model_revision,
-        dataset_id=config.dataset_id,
-        dataset_revision=config.dataset_revision,
-        compile_policy=CompilePolicy(args.compile_policy),
-        training=config.training,
+        training=training,
         quantization_variant=variant,
     )
 
@@ -103,9 +116,16 @@ def config_from_args(args: argparse.Namespace) -> RuntimeConfig:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    config = config_from_args(args)
-    handler = TASK_HANDLERS[args.task]
-    return handler(config)
+    config = _runtime_config_from_args(args)
+    if args.task == "train":
+        train_and_export(config)
+        return 0
+    evaluate_model(
+        config,
+        model_path=args.model_path,
+        output_path=args.output_path,
+    )
+    return 0
 
 
 if __name__ == "__main__":

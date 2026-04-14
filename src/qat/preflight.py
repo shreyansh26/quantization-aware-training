@@ -61,16 +61,10 @@ def check_variant_support(
     variant: QuantizationVariant | None,
 ) -> list[PreflightCheck]:
     if variant is None:
-        return [
-            PreflightCheck(
-                name="variant",
-                ok=True,
-                detail="baseline run selected",
-            )
-        ]
+        return [PreflightCheck(name="variant", ok=True, detail="baseline mode")]
     metadata = get_variant_metadata(variant)
     assert metadata is not None
-    checks = [
+    return [
         PreflightCheck(
             name="variant",
             ok=True,
@@ -80,18 +74,6 @@ def check_variant_support(
             ),
         )
     ]
-    if (
-        metadata.weight_dtype == "int4"
-        and metadata.activation_dtype == "int8"
-    ):
-        checks.append(
-            PreflightCheck(
-                name="variant:int4_int8",
-                ok=False,
-                detail="int4/int8 is explicitly unsupported for this project",
-            )
-        )
-    return checks
 
 
 def _fp8_required(metadata: VariantMetadata | None) -> bool:
@@ -100,11 +82,7 @@ def _fp8_required(metadata: VariantMetadata | None) -> bool:
     return "fp8" in {metadata.weight_dtype, metadata.activation_dtype}
 
 
-def check_cuda(
-    *,
-    gpu_index: int,
-    variant: QuantizationVariant | None,
-) -> list[PreflightCheck]:
+def check_cuda(variant: QuantizationVariant | None) -> list[PreflightCheck]:
     try:
         import torch
     except ImportError:
@@ -116,7 +94,6 @@ def check_cuda(
             )
         ]
 
-    checks: list[PreflightCheck] = []
     if not torch.cuda.is_available():
         return [
             PreflightCheck(
@@ -126,32 +103,17 @@ def check_cuda(
             )
         ]
 
-    device_count = torch.cuda.device_count()
-    if gpu_index < 0 or gpu_index >= device_count:
-        return [
-            PreflightCheck(
-                name="cuda:device",
-                ok=False,
-                detail=(
-                    f"requested GPU {gpu_index} is outside the visible range "
-                    f"0..{device_count - 1}"
-                ),
-            )
-        ]
-
-    device_name = torch.cuda.get_device_name(gpu_index)
-    is_h100 = "H100" in device_name.upper()
-    checks.append(
+    device_name = torch.cuda.get_device_name(0)
+    checks = [
         PreflightCheck(
             name="cuda:device",
-            ok=is_h100,
-            detail=f"GPU {gpu_index}: {device_name}",
+            ok="H100" in device_name.upper(),
+            detail=f"visible cuda:0 -> {device_name}",
         )
-    )
-
+    ]
     metadata = get_variant_metadata(variant)
     if _fp8_required(metadata):
-        major, minor = torch.cuda.get_device_capability(gpu_index)
+        major, minor = torch.cuda.get_device_capability(0)
         checks.append(
             PreflightCheck(
                 name="cuda:fp8",
@@ -164,13 +126,12 @@ def check_cuda(
 
 def run_preflight(
     *,
-    gpu_index: int,
     variant: QuantizationVariant | None,
 ) -> list[PreflightCheck]:
     checks = [check_python_version()]
     checks.extend(check_required_packages())
     checks.extend(check_variant_support(variant))
-    checks.extend(check_cuda(gpu_index=gpu_index, variant=variant))
+    checks.extend(check_cuda(variant))
     return checks
 
 
@@ -184,18 +145,16 @@ def format_report(checks: list[PreflightCheck]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m qat.preflight")
-    parser.add_argument("--gpu-index", type=int, default=5)
     parser.add_argument(
         "--variant",
         choices=[variant.value for variant in QuantizationVariant],
         default=None,
     )
     args = parser.parse_args(argv)
-
     variant = (
         QuantizationVariant(args.variant) if args.variant is not None else None
     )
-    checks = run_preflight(gpu_index=args.gpu_index, variant=variant)
+    checks = run_preflight(variant=variant)
     print(format_report(checks))
     return 0 if all(check.ok for check in checks) else 1
 
