@@ -1,5 +1,7 @@
 ref_*/
 AGENTS.md
+notes/
+plans/
 .venv/
 __pycache__/
 .pytest_cache/
