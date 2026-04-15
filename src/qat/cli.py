@@ -4,6 +4,7 @@ import argparse
 
 from qat.config import (
     DEFAULT_METRICS_OUTPUT,
+    CompilePolicy,
     RunMode,
     RuntimeConfig,
     TrainingConfig,
@@ -75,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
     )
+    train_parser.add_argument(
+        "--compile",
+        choices=[policy.value for policy in CompilePolicy],
+        default=CompilePolicy.DISABLED.value,
+        help="Training compile policy.",
+    )
 
     eval_parser = subparsers.add_parser("eval")
     _add_common_args(eval_parser)
@@ -108,6 +115,7 @@ def _runtime_config_from_args(args: argparse.Namespace) -> RuntimeConfig:
         split=get_split_config(args.type, seed=args.seed),
         mode=mode,
         seed=args.seed,
+        compile_policy=CompilePolicy(getattr(args, "compile", "disabled")),
         training=training,
         quantization_variant=variant,
     )

@@ -19,6 +19,8 @@ def test_cli_builds_train_args() -> None:
             "int8_bf16",
             "--training.learning-rate",
             "1e-5",
+            "--compile",
+            "required",
         ]
     )
     assert isinstance(args, Namespace)
@@ -28,6 +30,7 @@ def test_cli_builds_train_args() -> None:
     assert args.seed == 21
     assert args.quantization_variant == QuantizationVariant.INT8_BF16.value
     assert args.training_learning_rate == 1e-5
+    assert args.compile == "required"
 
 
 def test_cli_builds_eval_args() -> None:
