@@ -104,7 +104,7 @@ def are_answers_equivalent(prediction: str, reference: str) -> tuple[bool, str]:
     try:
         lhs = sympy.sympify(_sympy_parseable(prediction))
         rhs = sympy.sympify(_sympy_parseable(reference))
-    except (sympy.SympifyError, TypeError, ValueError):
+    except (sympy.SympifyError, TypeError, ValueError, AttributeError):
         return False, "none"
 
     try:

@@ -40,6 +40,18 @@ def test_evaluate_prediction_handles_non_matching_answers() -> None:
     assert decision.match_method == "none"
 
 
+def test_evaluate_prediction_handles_unparseable_freeform_text() -> None:
+    decision = evaluate_prediction(
+        prediction=(
+            "To add these fractions, we need a common denominator. "
+            "The common denominator for 4 and 2 is 4."
+        ),
+        reference=r"\boxed{\frac{3}{4}}",
+    )
+    assert not decision.is_correct
+    assert decision.match_method == "none"
+
+
 def test_append_metrics_row_creates_header(tmp_path) -> None:  # noqa: ANN001
     path = tmp_path / "metrics_numinamath_cot.csv"
     append_metrics_row(
