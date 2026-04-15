@@ -149,3 +149,13 @@ CUDA_VISIBLE_DEVICES=5 uv run python -m qat.preflight --variant fp8_fp8
 - The eval path currently performs a loadability check before the actual evaluation pass, so the model is loaded twice per eval run.
 - Known FP8 serving failures will surface during the loadability gate before generation starts.
 - QAT uses fake quantization with an explicit straight-through estimator in [`src/qat/quantization/qat.py`](src/qat/quantization/qat.py): the forward pass uses the quantized value while the backward pass flows through the original tensor via `original + (quantized - original).detach()`.
+
+## Full-Run Comparison
+
+On the full `NuminaMath-CoT` split used in this repo, the observed accuracies were:
+
+- baseline bf16: `0.202`
+- QAT `int8_int8`: `0.202`
+- PTQ dynamic `W8A8 INT8`: `0.188`
+
+In this comparison, QAT preserved the baseline accuracy while the corresponding PTQ `W8A8 INT8` artifact dropped by `0.014`. That does not prove a universal rule, but it does show the practical outcome this repo was built to study: QAT can preserve accuracy better than PTQ on the same model and evaluation flow.
