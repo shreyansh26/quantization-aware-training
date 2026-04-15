@@ -114,6 +114,25 @@ CUDA_VISIBLE_DEVICES=5 uv run python -m qat.cli train \
   --training.num-epochs 1
 ```
 
+### Train with `torch.compile`
+
+Train accepts `--compile` with:
+
+- `disabled`
+- `try`
+- `required`
+
+Example:
+
+```bash
+CUDA_VISIBLE_DEVICES=5 uv run python -m qat.cli train \
+  --type smoke \
+  --mode qat \
+  --seed 17 \
+  --quantization-variant int8_int8 \
+  --compile required
+```
+
 ### Evaluate from resolved artifact path
 
 If `--model-path` is omitted, the code resolves the artifact path from `--type`, `--mode`, `--seed`, and `--quantization-variant`.
@@ -149,6 +168,29 @@ CUDA_VISIBLE_DEVICES=5 uv run python -m qat.preflight --variant fp8_fp8
 - The eval path currently performs a loadability check before the actual evaluation pass, so the model is loaded twice per eval run.
 - Known FP8 serving failures will surface during the loadability gate before generation starts.
 - QAT uses fake quantization with an explicit straight-through estimator in [`src/qat/quantization/qat.py`](src/qat/quantization/qat.py): the forward pass uses the quantized value while the backward pass flows through the original tensor via `original + (quantized - original).detach()`.
+
+## Compile-Enabled Training
+
+The train CLI can run with `torch.compile` through `--compile {disabled,try,required}`.
+
+In this repo, compile-enabled training completed for the variants we probed:
+
+- baseline bf16
+- `int8_bf16`
+- `int8_int8`
+- `int4_bf16`
+
+Two caveats matter in practice:
+
+- the first compiled step has large startup overhead
+- compile-enabled training is not yet uniformly clean across the whole train/export path; a baseline smoke rerun hit an export-time compile probe failure even though the training step itself compiled successfully
+
+We also evaluated two compile-trained smoke QAT artifacts with the normal eval flow to check whether training with `torch.compile` was obviously hurting metrics. Relative to the existing non-compiled smoke runs, both tested variants were lower:
+
+- `int8_int8`: `0.28` without compile, `0.25` with compile-trained artifact
+- `int4_bf16`: `0.22` without compile, `0.17` with compile-trained artifact
+
+That is not enough evidence to claim a universal regression, but it does mean compile-enabled training should currently be treated as experimental rather than a default setting for accuracy-sensitive runs.
 
 ## Full-Run Comparison
 
