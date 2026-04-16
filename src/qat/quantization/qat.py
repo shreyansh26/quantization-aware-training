@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Self
 
 import torch
 import torch.nn.functional as F
@@ -198,7 +196,7 @@ class FakeQuantLinear(nn.Module):
             self.bias = nn.Parameter(linear.bias.detach().clone())
 
     @classmethod
-    def from_linear(cls, linear: nn.Linear, spec: QATSpec) -> FakeQuantLinear:
+    def from_linear(cls, linear: nn.Linear, spec: QATSpec) -> Self:
         return cls(linear, spec)
 
     def to_linear(self) -> nn.Linear:
