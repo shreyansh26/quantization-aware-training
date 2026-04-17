@@ -259,10 +259,26 @@ def _save_with_compressed_tensors_adapter(
 
     # The export flow is:
     # 1. attach quantization metadata/buffers to the plain Linear modules
-    # 2. let ModelCompressor rewrite/compress the weight tensors in-place
+    # 2. let ModelCompressor rewrite/compress the module parameters in-place
     # 3. save the rewritten model as a standalone Hugging Face artifact
     # 4. update the saved config with the compressed-tensors metadata required by
     #    downstream loaders such as vLLM
+    #
+    # Internally, compress_model():
+    # - matches each module to its attached QuantizationScheme
+    # - selects the quantization compressor based on scheme.format
+    # - reads the current module parameters plus the scale/zero-point buffers we
+    #   initialized above
+    # - quantizes / packs the floating-point weight tensors into the serialized
+    #   representation expected by that format
+    # - removes the original parameters from the module and registers the new
+    #   compressed parameters in their place
+    #
+    # The important subtlety is that this step materializes compressed *weights*
+    # into the exported artifact. Activation quantization is not precomputed and
+    # stored the same way, because activations depend on runtime inputs. Instead,
+    # activation quantization stays as scheme/config metadata that downstream
+    # runtimes can use when they execute the model.
     _attach_quantization_metadata(model, config)
     compressor = ModelCompressor.from_pretrained_model(model)
     compressor.compress_model(model)
