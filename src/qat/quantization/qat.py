@@ -12,6 +12,8 @@ ModuleFilter = Callable[[str, nn.Module], bool]
 
 @dataclass(frozen=True)
 class QATSpec:
+    """Quantization settings used to wrap a train-time fake-quant linear layer."""
+
     variant: QuantizationVariant
     weight_dtype: str
     activation_dtype: str
@@ -21,6 +23,8 @@ class QATSpec:
 
 
 def get_qat_spec(variant: QuantizationVariant | str) -> QATSpec:
+    """Map a configured variant to the fake-quant settings used during training."""
+
     parsed = parse_variant(variant)
     assert parsed is not None
     specs = {
@@ -73,6 +77,8 @@ def get_qat_spec(variant: QuantizationVariant | str) -> QATSpec:
 
 
 def _ste(original: torch.Tensor, quantized: torch.Tensor) -> torch.Tensor:
+    """Return quantized values in forward while keeping identity gradients."""
+
     return original + (quantized - original).detach()
 
 
@@ -80,6 +86,8 @@ def _reshape_groups(
     x: torch.Tensor,
     group_size: int,
 ) -> tuple[torch.Tensor, tuple[int, ...]]:
+    """Split the last dimension into fixed-size groups for grouped weight quant."""
+
     if x.shape[-1] % group_size != 0:
         raise ValueError(
             f"last dimension {x.shape[-1]} must be divisible by group_size {group_size}"
@@ -97,6 +105,12 @@ def fake_quantize_int(
     group_size: int | None = None,
     symmetric: bool = True,
 ) -> torch.Tensor:
+    """Fake-quantize integer tensors and dequantize back into the original dtype.
+
+    The returned tensor stays in floating point for training, but the values are
+    snapped to the integer grid implied by `bits`, `granularity`, and `symmetric`.
+    """
+
     qmin = -(2 ** (bits - 1)) if symmetric else 0
     qmax = (2 ** (bits - 1)) - 1 if symmetric else (2**bits) - 1
 
@@ -123,6 +137,8 @@ def fake_quantize_int(
         scale = torch.maximum(x_min.abs(), x_max.abs()) / float(qmax)
         zero_point = torch.zeros_like(scale)
     else:
+        # Activation quantization uses asymmetric ranges so the observed min/max
+        # interval is preserved instead of forcing zero-centered buckets.
         scale = (x_max - x_min).clamp_min(1e-8) / float(qmax - qmin)
         zero_point = qmin - torch.round(x_min / scale)
     scale = scale.clamp_min(1e-8)
@@ -132,6 +148,8 @@ def fake_quantize_int(
 
 
 def fake_quantize_fp8(x: torch.Tensor, *, granularity: str) -> torch.Tensor:
+    """Approximate FP8 quantization while leaving the training tensor in fp/bf16."""
+
     if granularity == "none":
         return x
     if granularity not in {"per_row", "per_channel", "per_tensor"}:
@@ -140,6 +158,8 @@ def fake_quantize_fp8(x: torch.Tensor, *, granularity: str) -> torch.Tensor:
     try:
         dq = x.to(torch.float8_e4m3fn).to(x.dtype)
     except RuntimeError:
+        # The fallback keeps the same scaling contract as the FP8 path but avoids
+        # requiring native float8 support in every environment.
         is_vectorwise = granularity in {"per_row", "per_channel"}
         scale_dims = None if granularity == "per_tensor" else (-1,)
         max_abs = x.abs().amax(dim=scale_dims, keepdim=is_vectorwise)
@@ -149,6 +169,8 @@ def fake_quantize_fp8(x: torch.Tensor, *, granularity: str) -> torch.Tensor:
 
 
 def apply_activation_fake_quant(x: torch.Tensor, spec: QATSpec) -> torch.Tensor:
+    """Apply the activation side of the configured QAT scheme."""
+
     if spec.activation_dtype == "bf16":
         return x
     if spec.activation_dtype == "fp8":
@@ -164,6 +186,8 @@ def apply_activation_fake_quant(x: torch.Tensor, spec: QATSpec) -> torch.Tensor:
 
 
 def apply_weight_fake_quant(weight: torch.Tensor, spec: QATSpec) -> torch.Tensor:
+    """Apply the weight side of the configured QAT scheme."""
+
     if spec.weight_dtype == "fp8":
         return fake_quantize_fp8(weight, granularity=spec.weight_granularity)
     if spec.weight_dtype == "int8":
@@ -185,6 +209,8 @@ def apply_weight_fake_quant(weight: torch.Tensor, spec: QATSpec) -> torch.Tensor
 
 
 class FakeQuantLinear(nn.Module):
+    """Linear layer wrapper that fake-quantizes activations and weights in forward."""
+
     def __init__(self, linear: nn.Linear, spec: QATSpec) -> None:
         super().__init__()
         self.in_features = linear.in_features
@@ -198,9 +224,13 @@ class FakeQuantLinear(nn.Module):
 
     @classmethod
     def from_linear(cls, linear: nn.Linear, spec: QATSpec) -> Self:
+        """Clone an existing Linear into a QAT wrapper with the same parameters."""
+
         return cls(linear, spec)
 
     def to_linear(self) -> nn.Linear:
+        """Materialize a plain Linear for checkpoint export or serving conversion."""
+
         linear = nn.Linear(
             self.in_features,
             self.out_features,
@@ -214,12 +244,16 @@ class FakeQuantLinear(nn.Module):
         return linear
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run linear projection using fake-quantized activations and weights."""
+
         qx = apply_activation_fake_quant(x, self.spec)
         qw = apply_weight_fake_quant(self.weight, self.spec)
         return F.linear(qx, qw, self.bias)
 
 
 def default_linear_filter(name: str, module: nn.Module) -> bool:
+    """Select transformer Linear layers while leaving lm_head untouched."""
+
     if not isinstance(module, nn.Linear):
         return False
     if "lm_head" in name:
@@ -234,6 +268,8 @@ def prepare_model_for_qat(
     module_filter: ModuleFilter | None = None,
     prefix: str = "",
 ) -> nn.Module:
+    """Replace eligible Linear modules with FakeQuantLinear recursively."""
+
     spec = get_qat_spec(variant)
     filter_fn = module_filter or default_linear_filter
     for name, child in list(model.named_children()):
@@ -251,6 +287,8 @@ def prepare_model_for_qat(
 
 
 def convert_model_from_qat(model: nn.Module) -> nn.Module:
+    """Strip FakeQuantLinear wrappers back to plain Linear modules."""
+
     for name, child in list(model.named_children()):
         if isinstance(child, FakeQuantLinear):
             setattr(model, name, child.to_linear())

@@ -97,6 +97,8 @@ def _load_hf_model_and_tokenizer_from_checkpoint(
 
 
 def _activation_quant_args(spec) -> QuantizationArgs | None:  # noqa: ANN001
+    """Translate local QAT activation settings into compressed-tensors metadata."""
+
     if spec.activation_dtype == "bf16":
         return None
     if spec.activation_dtype == "fp8":
@@ -118,6 +120,8 @@ def _activation_quant_args(spec) -> QuantizationArgs | None:  # noqa: ANN001
 
 
 def _weight_quant_args(spec) -> QuantizationArgs:  # noqa: ANN001
+    """Translate local QAT weight settings into compressed-tensors metadata."""
+
     if spec.weight_dtype == "fp8":
         return QuantizationArgs(
             num_bits=8,
@@ -143,6 +147,8 @@ def _weight_quant_args(spec) -> QuantizationArgs:  # noqa: ANN001
 
 
 def _compression_format_for_variant(config: RuntimeConfig) -> CompressionFormat:
+    """Choose the serialized compression format expected for the variant."""
+
     variant = config.quantization_variant
     if variant is None:
         return CompressionFormat.dense
@@ -159,6 +165,8 @@ def _min_max_for_weight(
     weight: torch.Tensor,
     args: QuantizationArgs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Collect per-tensor, per-channel, or per-group ranges for a weight matrix."""
+
     if args.strategy == QuantizationStrategy.TENSOR:
         min_vals = weight.amin().reshape(1)
         max_vals = weight.amax().reshape(1)
@@ -180,6 +188,8 @@ def _min_max_for_weight(
 
 
 def _attach_weight_qparams(module: nn.Linear, args: QuantizationArgs) -> None:
+    """Populate the module buffers that compressed-tensors reads during export."""
+
     min_vals, max_vals = _min_max_for_weight(module.weight.detach(), args)
     scales, zero_points = calculate_qparams(min_vals, max_vals, args)
     module.weight_scale.data.copy_(scales.to(module.weight_scale.dtype))
@@ -190,6 +200,8 @@ def _attach_weight_qparams(module: nn.Linear, args: QuantizationArgs) -> None:
 
 
 def _attach_quantization_metadata(model: nn.Module, config: RuntimeConfig) -> None:
+    """Attach the quant buffers and scheme metadata needed before compression."""
+
     if config.quantization_variant is None:
         return
     spec = get_qat_spec(config.quantization_variant)
@@ -213,6 +225,8 @@ def _save_with_compressed_tensors_adapter(
     *,
     config: RuntimeConfig,
 ) -> None:
+    """Save either a dense model or a compressed-tensors quantized artifact."""
+
     if config.quantization_variant is None:
         model.save_pretrained(artifact_dir, safe_serialization=True)
         return
