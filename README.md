@@ -169,6 +169,55 @@ CUDA_VISIBLE_DEVICES=5 uv run python -m qat.preflight --variant fp8_fp8
 - Known FP8 serving failures will surface during the loadability gate before generation starts.
 - QAT uses fake quantization with an explicit straight-through estimator in [`src/qat/quantization/qat.py`](src/qat/quantization/qat.py): the forward pass uses the quantized value while the backward pass flows through the original tensor via `original + (quantized - original).detach()`.
 
+## QAT Flow
+
+This is the train-time QAT path for a wrapped `FakeQuantLinear` layer. The key idea is that the forward pass uses fake-quantized activations and weights, while the backward pass uses the straight-through estimator so gradients flow to the original floating-point tensors.
+
+```mermaid
+flowchart TD
+    A[Input activation x] --> B[apply_activation_fake_quant]
+    W[Stored fp/bf16 weight parameter] --> C[apply_weight_fake_quant]
+
+    subgraph ActivationPath[Activation fake quant path]
+        B --> B1{Activation dtype}
+        B1 -->|bf16| B2[Pass through unchanged]
+        B1 -->|int8| B3[fake_quantize_int<br/>dynamic per-token asymmetric]
+        B1 -->|fp8| B4[fake_quantize_fp8<br/>per-row floating quant]
+    end
+
+    subgraph WeightPath[Weight fake quant path]
+        C --> C1{Weight dtype}
+        C1 -->|int8| C2[fake_quantize_int<br/>per-channel symmetric]
+        C1 -->|int4| C3[fake_quantize_int<br/>per-group symmetric]
+        C1 -->|fp8| C4[fake_quantize_fp8<br/>per-channel floating quant]
+    end
+
+    B2 --> D[qx]
+    B3 --> D
+    B4 --> D
+    C2 --> E[qw]
+    C3 --> E
+    C4 --> E
+
+    D --> F[F.linear qx qw bias]
+    E --> F
+    F --> G[Loss]
+    G --> H[Backward]
+
+    subgraph STE[Straight-through estimator]
+        S1[original + quantized - original detach] --> S2[Forward value equals quantized tensor]
+        S1 --> S3[Backward gradient flows as identity to original tensor]
+    end
+
+    B3 -.uses .-> S1
+    B4 -.uses .-> S1
+    C2 -.uses .-> S1
+    C3 -.uses .-> S1
+    C4 -.uses .-> S1
+
+    H --> I[Gradients update original floating-point weight parameter]
+```
+
 ## Compile-Enabled Training
 
 The train CLI can run with `torch.compile` through `--compile {disabled,try,required}`.
