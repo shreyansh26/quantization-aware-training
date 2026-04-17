@@ -191,6 +191,15 @@ def _attach_weight_qparams(module: nn.Linear, args: QuantizationArgs) -> None:
     """Populate the module buffers that compressed-tensors reads during export."""
 
     min_vals, max_vals = _min_max_for_weight(module.weight.detach(), args)
+    # compressed_tensors.calculate_qparams takes the observed min/max range and
+    # converts it into the affine quantization parameters that the export path
+    # expects: one scale per tensor/channel/group plus an optional zero point.
+    #
+    # In the symmetric INT4/INT8 cases used here this yields zero-centered ranges
+    # with zero_point == 0. In asymmetric cases, it would compute a nonzero zero
+    # point so that the observed floating-point interval maps into the integer
+    # range. The helper also guarantees that 0.0 stays representable and clamps
+    # degenerate scales away from exact zero.
     scales, zero_points = calculate_qparams(min_vals, max_vals, args)
     module.weight_scale.data.copy_(scales.to(module.weight_scale.dtype))
     if hasattr(module, "weight_zero_point"):
@@ -215,7 +224,24 @@ def _attach_quantization_metadata(model: nn.Module, config: RuntimeConfig) -> No
     for name, module in model.named_modules():
         if not default_linear_filter(name, module):
             continue
+        # compressed_tensors.initialize_module_for_quantization does the module
+        # bookkeeping that its compressor expects before it can rewrite weights:
+        #
+        # 1. it clears any existing qparam buffers on the module
+        # 2. it allocates fresh buffers such as weight_scale / weight_zero_point
+        #    and any activation-side metadata implied by the scheme
+        # 3. it stores quantization_scheme / quantization_status on the module
+        # 4. it wraps the forward path with compressed-tensors quantization hooks
+        #
+        # In this repo we only rely on a narrow subset of that behavior for
+        # export-time preparation of nn.Linear layers. We do not use the wrapped
+        # forward path for training here, but we do need the allocated buffers
+        # and attached scheme metadata before ModelCompressor.compress_model().
         initialize_module_for_quantization(module, scheme)
+        # initialize_module_for_quantization allocates the qparam buffers, but it
+        # does not populate the weight scales from our trained floating-point
+        # weights. We do that explicitly from the current weight tensor so the
+        # compressor sees concrete channel/group statistics during export.
         _attach_weight_qparams(module, scheme.weights)
 
 
@@ -231,6 +257,12 @@ def _save_with_compressed_tensors_adapter(
         model.save_pretrained(artifact_dir, safe_serialization=True)
         return
 
+    # The export flow is:
+    # 1. attach quantization metadata/buffers to the plain Linear modules
+    # 2. let ModelCompressor rewrite/compress the weight tensors in-place
+    # 3. save the rewritten model as a standalone Hugging Face artifact
+    # 4. update the saved config with the compressed-tensors metadata required by
+    #    downstream loaders such as vLLM
     _attach_quantization_metadata(model, config)
     compressor = ModelCompressor.from_pretrained_model(model)
     compressor.compress_model(model)

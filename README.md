@@ -218,6 +218,48 @@ flowchart TD
     H --> I[Gradients update original floating-point weight parameter]
 ```
 
+## Export Flow
+
+This is the export-time path after QAT training has finished. At this stage we stop using `FakeQuantLinear`, recover plain `nn.Linear` modules, attach the quantization metadata expected by `compressed_tensors`, and then let its compressor rewrite the trained floating-point weights into the serialized quantized artifact.
+
+```mermaid
+flowchart TD
+    A[Checkpoint dir from train step] --> B[load checkpoint model and tokenizer]
+    B --> C[convert_model_from_qat]
+    C --> D[FakeQuantLinear -> nn.Linear]
+
+    D --> E[_attach_quantization_metadata]
+
+    subgraph LocalPrep[Local export prep in this repo]
+        E --> E1[get_qat_spec]
+        E1 --> E2[build QuantizationScheme]
+        E2 --> E3[iterate eligible Linear modules]
+        E3 --> E4[initialize_module_for_quantization]
+        E4 --> E5[allocate qparam buffers and attach quantization metadata]
+        E5 --> E6[_min_max_for_weight]
+        E6 --> E7[collect per-channel or per-group ranges]
+        E7 --> E8[calculate_qparams]
+        E8 --> E9[compute scale and zero_point tensors]
+        E9 --> E10[copy into weight_scale and weight_zero_point buffers]
+    end
+
+    E10 --> F[ModelCompressor.from_pretrained_model]
+    F --> G[compressor.compress_model]
+
+    subgraph CompressedTensors[compressed_tensors export internals we rely on]
+        G --> G1[read attached QuantizationScheme and qparam buffers]
+        G1 --> G2[quantize and pack trained float weights]
+        G2 --> G3[rewrite module weights into compressed representation]
+    end
+
+    G3 --> H[model.save_pretrained]
+    H --> I[compressor.update_config]
+    I --> J[write compressed_tensors config metadata]
+    J --> K[probe_exported_model_compile]
+    K --> L[verify_export_completeness]
+    L --> M[final standalone artifact dir]
+```
+
 ## Compile-Enabled Training
 
 The train CLI can run with `torch.compile` through `--compile {disabled,try,required}`.
