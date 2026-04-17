@@ -77,7 +77,23 @@ def get_qat_spec(variant: QuantizationVariant | str) -> QATSpec:
 
 
 def _ste(original: torch.Tensor, quantized: torch.Tensor) -> torch.Tensor:
-    """Return quantized values in forward while keeping identity gradients."""
+    """Return the fake-quantized forward value while preserving float gradients.
+
+    `quantized` here is slightly overloaded: in this file it is the output of a
+    quantize-dequantize (QDQ) step, not a packed INT4/INT8 tensor that can be
+    consumed directly by an inference kernel.
+
+    That distinction matters:
+    - during QAT training we still run ordinary floating-point PyTorch ops
+    - so we quantize onto the target grid and immediately dequantize back to a
+      float tensor with the quantization error baked in
+    - the forward pass therefore sees values that behave like quantized values,
+      but are represented as normal float tensors
+
+    The STE then makes autograd treat this as identity with respect to the
+    original float tensor. Forward uses the dequantized, grid-snapped values;
+    backward updates the original float weights/activations.
+    """
 
     return original + (quantized - original).detach()
 
@@ -126,7 +142,30 @@ def _calculate_qparams(
     dtype: str,
     symmetric: bool,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Mirror the compressed-tensors min/max -> scale/zero-point calculation."""
+    """Mirror the compressed-tensors min/max -> scale/zero-point calculation.
+
+    Symmetric vs asymmetric here follows standard affine quantization rules:
+
+    - symmetric:
+      used for weights in this repo. We quantize around zero and keep
+      `zero_point == 0`. This is a natural fit for model weights because they
+      are usually distributed around zero, and many weight-only kernels assume
+      or prefer zero-centered quantization.
+
+    - asymmetric:
+      used for INT8 activations in this repo. Activations can be shifted away
+      from zero, so allowing a learned zero-point gives better coverage of the
+      observed min/max interval.
+
+    FP8 also reuses this helper for its zero-centered scale computation. That
+    does not mean FP8 is following the integer affine path end to end: the real
+    divergence happens later in `_qdq()`, where integers use `round(...)` onto
+    an integer grid while FP8 uses a cast onto the FP8 floating-point grid.
+
+    We also force 0.0 into the representable range before computing qparams.
+    That matches compressed-tensors and avoids pathological cases where the
+    affine mapping would exclude exact zero.
+    """
 
     min_vals = torch.minimum(min_vals, torch.zeros_like(min_vals))
     max_vals = torch.maximum(max_vals, torch.zeros_like(max_vals))
@@ -162,7 +201,26 @@ def _qdq(
     bits: int,
     dtype: str,
 ) -> torch.Tensor:
-    """Quantize then dequantize with compressed-tensors-compatible rules."""
+    """Quantize then dequantize with compressed-tensors-compatible rules.
+
+    QAT does not run a true integer/fp8 matmul in forward. Instead it simulates
+    the quantization error that inference will see:
+
+    1. divide by scale and add zero-point
+    2. clamp to the target quantized range
+    3. round/cast onto that grid
+    4. dequantize back to the original floating-point dtype
+
+    The result is still a float tensor, but its values are exactly those that
+    would come back from a quantize -> dequantize round trip. That is what lets
+    the training forward pass "feel" quantization error while still using normal
+    PyTorch kernels and autograd.
+
+    Actual inference is different:
+    - weights are exported in compressed form by compressed-tensors
+    - activations are quantized dynamically by the serving runtime
+    - inference kernels then operate on those runtime quantized values
+    """
 
     qmin, qmax = _calculate_range(bits=bits, dtype=dtype, device=x.device)
     scaled = x / scale
@@ -244,6 +302,11 @@ def fake_quantize_int(
 
     The returned tensor stays in floating point for training, but the values are
     snapped to the integer grid implied by `bits`, `granularity`, and `symmetric`.
+
+    This is why the QAT forward pass uses dequantized values rather than packed
+    integer tensors: training wants the quantization noise, not a separate
+    integer execution engine. Export/inference is where we turn the learned float
+    weights into a true compressed INT8/INT4 artifact.
     """
 
     if granularity == "per_channel":
@@ -296,7 +359,17 @@ def fake_quantize_int(
 
 
 def fake_quantize_fp8(x: torch.Tensor, *, granularity: str) -> torch.Tensor:
-    """Fake-quantize FP8 tensors using compressed-tensors-style scaled QDQ."""
+    """Fake-quantize FP8 tensors using compressed-tensors-style scaled QDQ.
+
+    As with the integer path, the output is dequantized back to float for the
+    training forward pass. The values lie on the FP8 grid, but the tensor is not
+    stored/executed as a persistent FP8 parameter inside the training model.
+
+    This path intentionally reuses `_calculate_qparams(..., symmetric=True)` to
+    get a zero-centered scale. The quantizer itself is still different from the
+    integer path: `_qdq()` casts onto the FP8 lattice instead of rounding onto
+    an integer lattice with affine zero-point handling.
+    """
 
     if granularity == "none":
         return x
@@ -334,7 +407,18 @@ def fake_quantize_fp8(x: torch.Tensor, *, granularity: str) -> torch.Tensor:
 
 
 def apply_activation_fake_quant(x: torch.Tensor, spec: QATSpec) -> torch.Tensor:
-    """Apply the activation side of the configured QAT scheme."""
+    """Apply the activation side of the configured QAT scheme.
+
+    Activation policy in this repo:
+    - `bf16`: no activation quantization
+    - `fp8`: scaled FP8 fake quant
+    - `int8`: asymmetric fake quant
+
+    We use asymmetric INT8 activations because runtime activations are
+    input-dependent and can be shifted away from zero. Allowing a nonzero
+    zero-point gives better coverage of the observed range than forcing a
+    symmetric, zero-centered interval.
+    """
 
     if spec.activation_dtype == "bf16":
         return x
@@ -351,7 +435,18 @@ def apply_activation_fake_quant(x: torch.Tensor, spec: QATSpec) -> torch.Tensor:
 
 
 def apply_weight_fake_quant(weight: torch.Tensor, spec: QATSpec) -> torch.Tensor:
-    """Apply the weight side of the configured QAT scheme."""
+    """Apply the weight side of the configured QAT scheme.
+
+    Weight policy in this repo:
+    - `fp8`: scaled FP8 fake quant
+    - `int8`: symmetric per-channel fake quant
+    - `int4`: symmetric per-group fake quant
+
+    Integer weights stay symmetric because model weights are generally centered
+    around zero and the exported compressed formats also use zero-centered weight
+    quantization. This keeps train-time fake quant aligned with export-time
+    compression semantics.
+    """
 
     if spec.weight_dtype == "fp8":
         return fake_quantize_fp8(weight, granularity=spec.weight_granularity)
@@ -374,7 +469,20 @@ def apply_weight_fake_quant(weight: torch.Tensor, spec: QATSpec) -> torch.Tensor
 
 
 class FakeQuantLinear(nn.Module):
-    """Linear layer wrapper that fake-quantizes activations and weights in forward."""
+    """Linear layer wrapper that fake-quantizes activations and weights in forward.
+
+    Important mental model:
+    - `self.weight` remains the trainable floating-point parameter
+    - each forward pass produces a fake-quantized/dequantized view of that weight
+      and, optionally, of the input activations
+    - the matmul therefore runs on float tensors whose values have been snapped
+      to the target quantized grid
+
+    This is the standard QAT compromise:
+    - training keeps float parameters and normal autograd
+    - forward simulates inference-time quantization error
+    - export later materializes the true compressed weight representation
+    """
 
     def __init__(self, linear: nn.Linear, spec: QATSpec) -> None:
         super().__init__()
@@ -409,7 +517,16 @@ class FakeQuantLinear(nn.Module):
         return linear
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Run linear projection using fake-quantized activations and weights."""
+        """Run linear projection using fake-quantized activations and weights.
+
+        `qx` and `qw` are QDQ outputs, not packed quantized tensors. They are
+        floating-point tensors whose values have been snapped onto the target
+        quantization grid. That is why `F.linear` can consume them directly
+        during training.
+
+        Inference uses a different path: export serializes compressed weights,
+        and the inference runtime performs the actual quantized execution.
+        """
 
         qx = apply_activation_fake_quant(x, self.spec)
         qw = apply_weight_fake_quant(self.weight, self.spec)
