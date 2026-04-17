@@ -4,6 +4,7 @@ from typing import Any
 
 from torch import nn
 from torch.optim import AdamW
+from torch.utils.data import DataLoader
 
 from qat.config import RuntimeConfig, make_manifest
 from qat.data import load_numinamath_train_dataset
@@ -26,6 +27,8 @@ from qat.train.baseline import (
 
 
 def load_qat_model(config: RuntimeConfig) -> nn.Module:
+    """Load the baseline model and replace eligible Linear layers with QAT wrappers."""
+
     if config.quantization_variant is None:
         raise ValueError("QAT training requires a quantization variant")
     model = load_baseline_model(config)
@@ -43,6 +46,8 @@ def train_qat(
     tokenizer: Any | None = None,
     dataset: Any | None = None,
 ) -> BaselineTrainingSummary:
+    """Train the fake-quantized model and save a resumable checkpoint."""
+
     if config.quantization_variant is None:
         raise ValueError("QAT training requires a quantization variant")
 
@@ -63,7 +68,7 @@ def train_qat(
         tokenizer=tokenizer,
         max_length=max_length,
     )
-    dataloader = __import__("torch").utils.data.DataLoader(
+    dataloader = DataLoader(
         encoded_examples,
         batch_size=config.training.micro_batch_size,
         shuffle=False,
@@ -87,6 +92,9 @@ def train_qat(
     state = TrainerState()
     final_loss = 0.0
     for epoch in range(1, config.training.num_epochs + 1):
+        # QAT reuses the same optimizer/scheduler loop as baseline training; the
+        # only difference is that the wrapped Linear layers fake-quantize inside
+        # their forward pass.
         state, final_loss = train_one_epoch(
             model=model,
             dataloader=dataloader,
@@ -109,6 +117,8 @@ def train_qat(
         package_versions=collect_package_versions(),
         git_sha=git_sha(),
     )
+    # The saved checkpoint still contains the trainable floating-point weights.
+    # Quantized serving weights are produced later in the export step.
     save_training_checkpoint(
         checkpoint_dir=checkpoint_dir,
         state=state,

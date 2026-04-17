@@ -24,6 +24,8 @@ class SavePretrainedTokenizer(Protocol):
 
 @dataclass(frozen=True)
 class TrainerState:
+    """Minimal progress state needed to resume a training run."""
+
     epoch: int = 0
     step: int = 0
     optimizer_step: int = 0
@@ -31,6 +33,8 @@ class TrainerState:
 
 @dataclass(frozen=True)
 class BaselineTrainingSummary:
+    """Training summary returned to the runner before export starts."""
+
     checkpoint_dir: str
     compile_status: str
     steps_completed: int
@@ -38,12 +42,16 @@ class BaselineTrainingSummary:
 
 
 def runtime_device() -> torch.device:
+    """Return the CUDA device when available, otherwise fall back to CPU."""
+
     if torch.cuda.is_available():
         return torch.device("cuda")
     return torch.device("cpu")
 
 
 def load_baseline_tokenizer(config: RuntimeConfig):
+    """Load the tokenizer and ensure it has a valid padding token."""
+
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -56,6 +64,8 @@ def load_baseline_tokenizer(config: RuntimeConfig):
 
 
 def load_baseline_model(config: RuntimeConfig):
+    """Load the bf16 causal LM used by both baseline and QAT training."""
+
     from transformers import AutoModelForCausalLM
 
     model = AutoModelForCausalLM.from_pretrained(
@@ -78,6 +88,8 @@ def encode_split_examples(
     tokenizer: Any,
     max_length: int = 2048,
 ) -> list[dict[str, list[int]]]:
+    """Tokenize a fixed list of dataset rows into assistant-masked training examples."""
+
     encoded_examples: list[dict[str, list[int]]] = []
     for index in indices:
         row = dataset[int(index)]
@@ -94,6 +106,8 @@ def encode_split_examples(
 def collate_encoded_examples(
     batch: list[dict[str, list[int]]],
 ) -> dict[str, torch.Tensor]:
+    """Batch already-padded chat examples into dense torch tensors."""
+
     keys = ("input_ids", "attention_mask", "labels")
     output: dict[str, torch.Tensor] = {}
     for key in keys:
@@ -105,6 +119,8 @@ def compile_model_for_training(
     model: nn.Module,
     compile_policy: CompilePolicy,
 ) -> tuple[nn.Module, str]:
+    """Optionally wrap the training model with torch.compile."""
+
     if compile_policy == CompilePolicy.DISABLED:
         return model, "disabled"
     try:
@@ -128,6 +144,8 @@ def build_scheduler(
     total_steps: int,
     warmup_ratio: float,
 ) -> LambdaLR:
+    """Build a simple warmup-only scheduler shared by baseline and QAT runs."""
+
     return LambdaLR(
         optimizer,
         lr_lambda=lambda step: _warmup_factor(
@@ -148,6 +166,8 @@ def save_training_checkpoint(
     tokenizer: SavePretrainedTokenizer | None = None,
     manifest_payload: dict[str, Any] | None = None,
 ) -> None:
+    """Persist model, optimizer, scheduler, tokenizer, and manifest state."""
+
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -175,6 +195,8 @@ def load_training_checkpoint(
     optimizer: AdamW,
     scheduler: LambdaLR,
 ) -> TrainerState:
+    """Restore a previously saved training checkpoint into the live objects."""
+
     payload = torch.load(
         checkpoint_dir / "training_state.pt",
         map_location="cpu",
@@ -187,6 +209,8 @@ def load_training_checkpoint(
 
 
 def collect_package_versions() -> dict[str, str]:
+    """Record runtime package versions in the training manifest."""
+
     packages = [
         "torch",
         "transformers",
@@ -204,6 +228,8 @@ def collect_package_versions() -> dict[str, str]:
 
 
 def git_sha() -> str | None:
+    """Best-effort lookup of the current git commit for run provenance."""
+
     import subprocess
 
     try:
@@ -231,6 +257,8 @@ def train_one_epoch(
     start_step: int = 0,
     max_steps: int | None = None,
 ) -> tuple[TrainerState, float]:
+    """Run one epoch of teacher-forced language-model training."""
+
     model.train()
     step = start_step
     losses: list[float] = []
@@ -245,6 +273,8 @@ def train_one_epoch(
         losses.append(float(loss.detach().cpu()))
         should_step = (batch_index + 1) % grad_accumulation_steps == 0
         if should_step:
+            # Gradient accumulation keeps the micro-batch size small enough for a
+            # single GPU while preserving a larger effective batch size.
             torch.nn.utils.clip_grad_norm_(
                 model.parameters(),
                 max_norm=max_grad_norm,
