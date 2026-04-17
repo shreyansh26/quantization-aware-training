@@ -169,6 +169,66 @@ CUDA_VISIBLE_DEVICES=5 uv run python -m qat.preflight --variant fp8_fp8
 - Known FP8 serving failures will surface during the loadability gate before generation starts.
 - QAT uses fake quantization with an explicit straight-through estimator in [`src/qat/quantization/qat.py`](src/qat/quantization/qat.py): the forward pass uses the quantized value while the backward pass flows through the original tensor via `original + (quantized - original).detach()`.
 
+## Symmetric vs Asymmetric
+
+This repo uses different quantization styles for weights and activations:
+
+- weights use symmetric quantization for INT8 and INT4
+- INT8 activations use asymmetric quantization
+- FP8 paths are zero-centered in practice, but they use FP8 scale-based quantization instead of integer affine quantization with a learned zero-point
+
+The practical reason is:
+
+- weights are usually centered around zero, so symmetric quantization with `zero_point = 0` is a good fit and matches the exported compressed weight formats
+- activations are input-dependent and can be shifted away from zero, so asymmetric INT8 quantization uses a learned zero-point to cover the observed range more efficiently
+- FP8 still behaves like a zero-centered scheme here, but it is better described as scaled floating quantization than as the INT8-style symmetric/asymmetric affine case
+
+That same policy is implemented in [`src/qat/quantization/qat.py`](src/qat/quantization/qat.py):
+
+- `apply_weight_fake_quant(...)` uses symmetric integer quantization for `int8` and `int4`
+- `apply_activation_fake_quant(...)` uses asymmetric integer quantization for `int8`
+
+The math differs between integer affine quantization and FP8 scaling:
+
+- integer affine quantization:
+  - `q = clamp(round(x / scale) + zero_point, qmin, qmax)`
+  - `x_hat = (q - zero_point) * scale`
+- symmetric integer quantization:
+  - `zero_point = 0`
+  - `q = clamp(round(x / scale), qmin, qmax)`
+  - `x_hat = q * scale`
+- asymmetric integer quantization:
+  - `zero_point` is learned from the observed min/max range
+  - this lets the quantized grid shift away from zero
+- FP8 quantization:
+  - `y = x / scale`
+  - `q_fp8 = cast_to_fp8(y)`
+  - `x_hat = q_fp8 * scale`
+
+So FP8 is still zero-centered in practice, but it does not use the integer affine `zero_point` mechanism that distinguishes symmetric from asymmetric INT8/INT4 quantization.
+
+## QDQ and STE
+
+QAT training does not run a true quantized matmul. Instead it:
+
+1. starts from the floating-point tensor
+2. quantizes it onto the target grid
+3. dequantizes it back to float
+4. uses STE so backward updates the original floating-point tensor
+
+That is why the training forward pass uses float tensors whose values have already been snapped to the quantized grid. True compressed weights and quantized runtime execution happen later in the export and inference path.
+
+```mermaid
+flowchart LR
+    A["float tensor x"] --> B["compute scale / zero_point"]
+    B --> C["quantize onto INT8 / INT4 / FP8 grid"]
+    C --> D["dequantize back to float (QDQ output)"]
+    D --> E["_ste(original=x, quantized=dq)"]
+    E --> F["forward sees dq values"]
+    E --> G["backward treats path like identity"]
+    G --> H["update original float parameter / activation path"]
+```
+
 ## QAT Flow
 
 This is the train-time QAT path for a wrapped `FakeQuantLinear` layer. The key idea is that the forward pass uses fake-quantized activations and weights, while the backward pass uses the straight-through estimator so gradients flow to the original floating-point tensors.

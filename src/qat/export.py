@@ -279,6 +279,13 @@ def _save_with_compressed_tensors_adapter(
     # stored the same way, because activations depend on runtime inputs. Instead,
     # activation quantization stays as scheme/config metadata that downstream
     # runtimes can use when they execute the model.
+    #
+    # That is the train-vs-inference split:
+    # - train-time QAT uses QDQ float tensors to simulate quantization error
+    # - export-time compression turns learned float weights into a true serving
+    #   representation
+    # - inference runtimes then quantize activations on the fly and run the
+    #   quantized kernels that training never executes directly
     _attach_quantization_metadata(model, config)
     compressor = ModelCompressor.from_pretrained_model(model)
     compressor.compress_model(model)
