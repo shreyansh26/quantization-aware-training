@@ -223,26 +223,17 @@ flowchart TD
 This is the export-time path after QAT training has finished. At this stage we stop using `FakeQuantLinear`, recover plain `nn.Linear` modules, attach the quantization metadata expected by `compressed_tensors`, and then let its compressor rewrite the trained floating-point weights into the serialized quantized artifact.
 
 ```mermaid
-flowchart LR
-    A[Checkpoint dir from train step]
-    B[load checkpoint model and tokenizer]
-    C[convert_model_from_qat]
-    D[FakeQuantLinear -> nn.Linear]
-    E[_attach_quantization_metadata]
-    F[ModelCompressor.from_pretrained_model]
-    G[compressor.compress_model]
-    H[model.save_pretrained]
-    I[compressor.update_config]
-    J[write compressed_tensors config metadata]
-    K[probe_exported_model_compile]
-    L[verify_export_completeness]
-    M[final standalone artifact dir]
+flowchart TD
+    A[Checkpoint dir from train step] --> B[load checkpoint model and tokenizer]
+    B --> C[convert_model_from_qat]
+    C --> D[FakeQuantLinear -> nn.Linear]
 
-    A --> B --> C --> D --> E --> F --> G --> H --> I --> J --> K --> L --> M
+    D --> E[_attach_quantization_metadata]
 
     subgraph LocalPrep[Local export prep in this repo]
-        direction LR
-        E1[get_qat_spec] --> E2[build QuantizationScheme] --> E3[iterate eligible Linear modules]
+        E --> E1[get_qat_spec]
+        E1 --> E2[build QuantizationScheme]
+        E2 --> E3[iterate eligible Linear modules]
         E3 --> E4[initialize_module_for_quantization]
         E4 --> E5[allocate qparam buffers and attach quantization metadata]
         E5 --> E6[_min_max_for_weight]
@@ -252,19 +243,21 @@ flowchart LR
         E9 --> E10[copy into weight_scale and weight_zero_point buffers]
     end
 
-    E -.details.-> E1
-    E10 -.prepared modules.-> F
+    E10 --> F[ModelCompressor.from_pretrained_model]
+    F --> G[compressor.compress_model]
 
     subgraph CompressedTensors[compressed_tensors export internals we rely on]
-        direction LR
-        G1[read attached QuantizationScheme and qparam buffers]
-        G2[quantize and pack trained float weights]
-        G3[rewrite module weights into compressed representation]
-        G1 --> G2 --> G3
+        G --> G1[read attached QuantizationScheme and qparam buffers]
+        G1 --> G2[quantize and pack trained float weights]
+        G2 --> G3[rewrite module weights into compressed representation]
     end
 
-    G -.internals.-> G1
-    G3 -.compressed model state.-> H
+    G3 --> H[model.save_pretrained]
+    H --> I[compressor.update_config]
+    I --> J[write compressed_tensors config metadata]
+    J --> K[probe_exported_model_compile]
+    K --> L[verify_export_completeness]
+    L --> M[final standalone artifact dir]
 ```
 
 ## Compile-Enabled Training
