@@ -28,7 +28,7 @@ def get_qat_spec(variant: QuantizationVariant | str) -> QATSpec:
             variant=parsed,
             weight_dtype="fp8",
             activation_dtype="bf16",
-            weight_granularity="per_row",
+            weight_granularity="per_channel",
             activation_granularity="none",
         ),
         QuantizationVariant.INT8_BF16: QATSpec(
@@ -42,7 +42,7 @@ def get_qat_spec(variant: QuantizationVariant | str) -> QATSpec:
             variant=parsed,
             weight_dtype="fp8",
             activation_dtype="fp8",
-            weight_granularity="per_row",
+            weight_granularity="per_channel",
             activation_granularity="per_row",
         ),
         QuantizationVariant.INT8_INT8: QATSpec(
@@ -134,14 +134,15 @@ def fake_quantize_int(
 def fake_quantize_fp8(x: torch.Tensor, *, granularity: str) -> torch.Tensor:
     if granularity == "none":
         return x
-    if granularity not in {"per_row", "per_tensor"}:
+    if granularity not in {"per_row", "per_channel", "per_tensor"}:
         raise ValueError(f"unsupported fp8 granularity: {granularity}")
 
     try:
         dq = x.to(torch.float8_e4m3fn).to(x.dtype)
     except RuntimeError:
+        is_vectorwise = granularity in {"per_row", "per_channel"}
         scale_dims = None if granularity == "per_tensor" else (-1,)
-        max_abs = x.abs().amax(dim=scale_dims, keepdim=granularity == "per_row")
+        max_abs = x.abs().amax(dim=scale_dims, keepdim=is_vectorwise)
         max_abs = max_abs.clamp_min(1e-8)
         dq = (x / max_abs).clamp(-1, 1) * max_abs
     return _ste(x, dq)
