@@ -56,7 +56,7 @@ Baseline mode does not take a quantization variant.
 The default artifact root is:
 
 ```text
-/mnt/ssd2/shreyansh/ptq_experiments/artifacts_qat
+ptq_experiments/artifacts_qat
 ```
 
 Train artifacts are written under:
@@ -152,8 +152,8 @@ CUDA_VISIBLE_DEVICES=5 uv run python -m qat.cli eval \
   --type smoke \
   --mode baseline \
   --seed 17 \
-  --model-path /mnt/ssd2/shreyansh/ptq_experiments/artifacts_qat/baseline-smoke-baseline-seed17 \
-  --output-path /mnt/ssd2/shreyansh/ptq_experiments/artifacts_qat/metrics_numinamath_cot.csv
+  --model-path ptq_experiments/artifacts_qat/baseline-smoke-baseline-seed17 \
+  --output-path ptq_experiments/artifacts_qat/metrics_numinamath_cot.csv
 ```
 
 ### Run preflight only
