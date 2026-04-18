@@ -18,11 +18,11 @@ from compressed_tensors.quantization import (
 from compressed_tensors.quantization.lifecycle.initialize import (
     initialize_module_for_quantization,
 )
-from compressed_tensors.quantization.utils import calculate_qparams
 from torch import nn
 
 from qat.config import RunManifest, RuntimeConfig, artifact_dir_for_run
 from qat.quantization.qat import (
+    _calculate_qparams,
     convert_model_from_qat,
     default_linear_filter,
     get_qat_spec,
@@ -191,16 +191,29 @@ def _attach_weight_qparams(module: nn.Linear, args: QuantizationArgs) -> None:
     """Populate the module buffers that compressed-tensors reads during export."""
 
     min_vals, max_vals = _min_max_for_weight(module.weight.detach(), args)
-    # compressed_tensors.calculate_qparams takes the observed min/max range and
-    # converts it into the affine quantization parameters that the export path
-    # expects: one scale per tensor/channel/group plus an optional zero point.
+    # We reuse the repo-local qparam helper here rather than calling
+    # compressed_tensors.calculate_qparams directly. The local helper was aligned
+    # against compressed-tensors semantics for the supported schemes, and using it
+    # here keeps train-time fake quant math and export-time weight qparams driven
+    # by the same implementation.
     #
     # In the symmetric INT4/INT8 cases used here this yields zero-centered ranges
     # with zero_point == 0. In asymmetric cases, it would compute a nonzero zero
     # point so that the observed floating-point interval maps into the integer
     # range. The helper also guarantees that 0.0 stays representable and clamps
     # degenerate scales away from exact zero.
-    scales, zero_points = calculate_qparams(min_vals, max_vals, args)
+    dtype = {
+        QuantizationType.INT: "int",
+        QuantizationType.FLOAT: "float",
+    }[args.type]
+    symmetric = args.symmetric if args.symmetric is not None else True
+    scales, zero_points = _calculate_qparams(
+        min_vals,
+        max_vals,
+        bits=args.num_bits,
+        dtype=dtype,
+        symmetric=symmetric,
+    )
     module.weight_scale.data.copy_(scales.to(module.weight_scale.dtype))
     if hasattr(module, "weight_zero_point"):
         module.weight_zero_point.data.copy_(

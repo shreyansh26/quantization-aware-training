@@ -1,13 +1,22 @@
 import json
 
+import torch
+from compressed_tensors.quantization import (
+    QuantizationArgs,
+    QuantizationStrategy,
+    QuantizationType,
+)
+from compressed_tensors.quantization.utils import calculate_qparams
 from torch import nn
 
 from qat.config import CompilePolicy, RunMode, RuntimeConfig, SplitConfig
 from qat.export import (
+    _min_max_for_weight,
     export_model_artifact,
     load_checkpoint_manifest,
     verify_export_completeness,
 )
+from qat.quantization.qat import _calculate_qparams
 
 
 class TinyTokenizer:
@@ -86,3 +95,53 @@ def test_export_model_artifact_writes_final_directory(tmp_path, monkeypatch) -> 
     assert (artifact_dir / "config.json").exists()
     assert (artifact_dir / "tokenizer.json").exists()
     assert (artifact_dir / "manifest.json").exists()
+
+
+def test_local_qparams_match_compressed_tensors_for_supported_weight_schemes() -> None:
+    weight = torch.tensor(
+        [
+            [0.83, -0.41, 0.06, -0.12],
+            [-0.24, 0.71, -0.35, 0.18],
+        ],
+        dtype=torch.bfloat16,
+    )
+    args_list = [
+        QuantizationArgs(
+            num_bits=8,
+            type=QuantizationType.INT,
+            symmetric=True,
+            strategy=QuantizationStrategy.CHANNEL,
+        ),
+        QuantizationArgs(
+            num_bits=4,
+            type=QuantizationType.INT,
+            symmetric=True,
+            strategy=QuantizationStrategy.GROUP,
+            group_size=2,
+        ),
+        QuantizationArgs(
+            num_bits=8,
+            type=QuantizationType.FLOAT,
+            strategy=QuantizationStrategy.CHANNEL,
+        ),
+    ]
+
+    for args in args_list:
+        min_vals, max_vals = _min_max_for_weight(weight, args)
+        expected_scales, expected_zero_points = calculate_qparams(
+            min_vals,
+            max_vals,
+            args,
+        )
+        actual_scales, actual_zero_points = _calculate_qparams(
+            min_vals,
+            max_vals,
+            bits=args.num_bits,
+            dtype="float" if args.type == QuantizationType.FLOAT else "int",
+            symmetric=args.symmetric if args.symmetric is not None else True,
+        )
+        torch.testing.assert_close(actual_scales, expected_scales)
+        torch.testing.assert_close(
+            actual_zero_points.to(expected_zero_points.dtype),
+            expected_zero_points,
+        )
