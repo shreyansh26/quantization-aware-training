@@ -27,7 +27,11 @@ from qat.quantization.qat import (
     default_linear_filter,
     get_qat_spec,
 )
-from qat.train.baseline import compile_model_for_training, load_baseline_tokenizer
+from qat.train.baseline import (
+    compile_model_for_training,
+    load_baseline_tokenizer,
+    runtime_device,
+)
 
 
 @dataclass(frozen=True)
@@ -341,6 +345,8 @@ def probe_exported_model_compile(
         artifact_dir,
         torch_dtype=torch.bfloat16,
     )
+    device = runtime_device()
+    model.to(device)
     model.eval()
     model, status = compile_model_for_training(model, config.compile_policy)
     encoded = tokenizer(
@@ -349,6 +355,7 @@ def probe_exported_model_compile(
         truncation=True,
         max_length=max_length,
     )
+    encoded = {key: value.to(device) for key, value in encoded.items()}
     with torch.no_grad():
         model(**encoded)
     return status
