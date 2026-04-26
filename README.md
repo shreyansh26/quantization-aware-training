@@ -347,24 +347,14 @@ That is not enough evidence to claim a universal regression, but it does mean co
 
 ## Full-Run Comparison
 
-On the full `NuminaMath-CoT` split used in this repo (`5000` train, `500` eval), the original reference runs produced:
+On the full `NuminaMath-CoT` split used in this repo (`5000` train, `500` eval), the observed accuracies were:
 
 | Run | Artifact | Method | Quantization | Accuracy |
 | --- | --- | --- | --- | ---: |
 | baseline bf16 | `baseline-full-baseline-seed17` | SFT baseline | `bf16/bf16` | `0.202` |
-| QAT `int8_bf16` | `qat-full-int8_bf16-seed17` | QAT | `W8A16` | `0.188` |
-| QAT `int8_int8` | `qat-full-int8_int8-seed17` | QAT | `W8A8 INT8` | `0.202` |
-| QAT `int4_bf16` | `qat-full-int4_bf16-seed17` | QAT | `W4A16` | `0.182` |
+| QAT `int8_bf16` | `qat-full-int8_bf16-seed17` | QAT | `W8A16` | `0.208` |
+| QAT `int8_int8` | `qat-full-int8_int8-seed17` | QAT | `W8A8 INT8` | `0.200` |
+| QAT `int4_bf16` | `qat-full-int4_bf16-seed17` | QAT | `W4A16` | `0.186` |
 | PTQ dynamic `W8A8 INT8` | `model` | PTQ from the full baseline artifact | `W8A8 INT8` | `0.188` |
 
-The direct QAT-vs-PTQ comparison is the `int8_int8` row: QAT preserved the baseline accuracy at `0.202`, while the corresponding dynamic PTQ `W8A8 INT8` artifact evaluated at `0.188`, a `0.014` drop on the same evaluation flow. That does not prove a universal rule, but it is the practical outcome this repo was built to study.
-
-After aligning train-time fake quantization more closely with `compressed-tensors` export semantics, the full QAT reruns produced:
-
-| Variant | Original full accuracy | Aligned-QAT full accuracy | Delta |
-| --- | ---: | ---: | ---: |
-| `int8_bf16` | `0.188` | `0.208` | `+0.020` |
-| `int8_int8` | `0.202` | `0.200` | `-0.002` |
-| `int4_bf16` | `0.182` | `0.186` | `+0.004` |
-
-Those reruns did not include a new baseline, so the original `0.202` baseline remains the reference point. The alignment change did not show a broad regression across the full-data QAT variants: two variants improved and `int8_int8` was effectively flat.
+The direct QAT-vs-PTQ comparison is the `int8_int8` row: QAT stayed close to the `0.202` baseline at `0.200`, while the corresponding dynamic PTQ `W8A8 INT8` artifact evaluated at `0.188` on the same evaluation flow. That does not prove a universal rule, but it is the practical outcome this repo was built to study.
