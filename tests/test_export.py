@@ -14,6 +14,7 @@ from qat.export import (
     _min_max_for_weight,
     export_model_artifact,
     load_checkpoint_manifest,
+    probe_exported_model_compile,
     verify_export_completeness,
 )
 from qat.quantization.qat import _calculate_qparams
@@ -95,6 +96,85 @@ def test_export_model_artifact_writes_final_directory(tmp_path, monkeypatch) -> 
     assert (artifact_dir / "config.json").exists()
     assert (artifact_dir / "tokenizer.json").exists()
     assert (artifact_dir / "manifest.json").exists()
+
+
+def test_probe_exported_model_compile_uses_runtime_device(
+    tmp_path,
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    config = RuntimeConfig(
+        split=SplitConfig(name="smoke", train_size=2, test_size=1, seed=17),
+        mode=RunMode.BASELINE,
+        artifact_root=tmp_path,
+        compile_policy=CompilePolicy.REQUIRED,
+    )
+    device = torch.device("cuda")
+
+    class FakeTensor:
+        def __init__(self) -> None:
+            self.device = None
+
+        def to(self, target_device):  # noqa: ANN001
+            self.device = target_device
+            return self
+
+    class FakeTokenizer:
+        def __init__(self) -> None:
+            self.input_ids = FakeTensor()
+            self.attention_mask = FakeTensor()
+
+        def __call__(self, *args, **kwargs):  # noqa: ANN001
+            return {
+                "input_ids": self.input_ids,
+                "attention_mask": self.attention_mask,
+            }
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.device = None
+            self.encoded = None
+
+        def to(self, target_device):  # noqa: ANN001
+            self.device = target_device
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, **encoded):  # noqa: ANN003
+            self.encoded = encoded
+
+    fake_model = FakeModel()
+    fake_tokenizer = FakeTokenizer()
+    monkeypatch.setattr("qat.export.runtime_device", lambda: device)
+    monkeypatch.setattr(
+        "qat.export.compile_model_for_training",
+        lambda model, compile_policy: (model, "compiled"),
+    )
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    monkeypatch.setattr(
+        AutoModelForCausalLM,
+        "from_pretrained",
+        lambda *args, **kwargs: fake_model,
+    )
+    monkeypatch.setattr(
+        AutoTokenizer,
+        "from_pretrained",
+        lambda *args, **kwargs: fake_tokenizer,
+    )
+
+    status = probe_exported_model_compile(tmp_path, config)
+
+    assert status == "compiled"
+    assert fake_model.device == device
+    assert fake_model.encoded == {
+        "input_ids": fake_tokenizer.input_ids,
+        "attention_mask": fake_tokenizer.attention_mask,
+    }
+    assert fake_tokenizer.input_ids.device == device
+    assert fake_tokenizer.attention_mask.device == device
 
 
 def test_local_qparams_match_compressed_tensors_for_supported_weight_schemes() -> None:

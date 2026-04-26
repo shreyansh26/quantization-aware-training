@@ -327,28 +327,42 @@ The train CLI can run with `torch.compile` through `--compile {disabled,try,requ
 In this repo, compile-enabled training completed for the variants we probed:
 
 - baseline bf16
+- `fp8_bf16`
 - `int8_bf16`
+- `fp8_fp8`
 - `int8_int8`
+- `int4_fp8`
 - `int4_bf16`
 
-Two caveats matter in practice:
+The first compiled step has large startup overhead
 
-- the first compiled step has large startup overhead
-- compile-enabled training is not yet uniformly clean across the whole train/export path; a baseline smoke rerun hit an export-time compile probe failure even though the training step itself compiled successfully
+We also evaluated compile-trained smoke artifacts with the normal eval flow to check whether training with `torch.compile` was obviously hurting metrics. Where a non-compiled smoke score was available, results were mixed:
 
-We also evaluated two compile-trained smoke QAT artifacts with the normal eval flow to check whether training with `torch.compile` was obviously hurting metrics. Relative to the existing non-compiled smoke runs, both tested variants were lower:
-
-- `int8_int8`: `0.28` without compile, `0.25` with compile-trained artifact
-- `int4_bf16`: `0.22` without compile, `0.17` with compile-trained artifact
+| Variant | Split | Non-compiled accuracy | Compile-trained accuracy |
+| --- | --- | ---: | ---: |
+| baseline bf16 | smoke | `0.22` | `0.25` |
+| `fp8_bf16` | smoke | `0.21` | `0.22` |
+| `int8_bf16` | smoke | n/a | `0.21` |
+| `fp8_fp8` | smoke | `0.25` | `0.21` |
+| `int4_fp8` | smoke | `0.20` | `0.21` |
+| `int8_int8` | smoke | `0.28` | `0.25` |
+| `int4_bf16` | smoke | `0.22` | `0.17` |
 
 That is not enough evidence to claim a universal regression, but it does mean compile-enabled training should currently be treated as experimental rather than a default setting for accuracy-sensitive runs.
 
 ## Full-Run Comparison
 
-On the full `NuminaMath-CoT` split used in this repo, the observed accuracies were:
+On the full `NuminaMath-CoT` split used in this repo (`5000` train, `500` eval), the observed accuracies were:
 
-- baseline bf16: `0.202`
-- QAT `int8_int8`: `0.202`
-- PTQ dynamic `W8A8 INT8`: `0.188`
+| Run | Artifact | Method | Quantization | Accuracy |
+| --- | --- | --- | --- | ---: |
+| baseline bf16 | `baseline-full-baseline-seed17` | SFT baseline | `bf16/bf16` | `0.202` |
+| QAT `fp8_bf16` | `qat-full-fp8_bf16-seed17` | QAT | `FP8/BF16` | `0.216` |
+| QAT `int8_bf16` | `qat-full-int8_bf16-seed17` | QAT | `W8A16` | `0.208` |
+| QAT `fp8_fp8` | `qat-full-fp8_fp8-seed17` | QAT | `W8A8 FP8` | `0.212` |
+| QAT `int8_int8` | `qat-full-int8_int8-seed17` | QAT | `W8A8 INT8` | `0.200` |
+| QAT `int4_fp8` | `qat-full-int4_fp8-seed17` | QAT | `W4A8 FP8` | `0.174` |
+| QAT `int4_bf16` | `qat-full-int4_bf16-seed17` | QAT | `W4A16` | `0.186` |
+| PTQ dynamic `W8A8 INT8` | `model` | PTQ from the full baseline artifact | `W8A8 INT8` | `0.188` |
 
-In this comparison, QAT preserved the baseline accuracy while the corresponding PTQ `W8A8 INT8` artifact dropped by `0.014`. That does not prove a universal rule, but it does show the practical outcome this repo was built to study: QAT can preserve accuracy better than PTQ on the same model and evaluation flow.
+The direct QAT-vs-PTQ comparison is the `int8_int8` row: QAT stayed close to the `0.202` baseline at `0.200`, while the corresponding dynamic PTQ `W8A8 INT8` artifact evaluated at `0.188` on the same evaluation flow. That does not prove a universal rule, but it is the practical outcome this repo was built to study.
