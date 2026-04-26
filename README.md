@@ -327,19 +327,22 @@ The train CLI can run with `torch.compile` through `--compile {disabled,try,requ
 In this repo, compile-enabled training completed for the variants we probed:
 
 - baseline bf16
+- `fp8_bf16`
 - `int8_bf16`
+- `fp8_fp8`
 - `int8_int8`
+- `int4_fp8`
 - `int4_bf16`
 
-Two caveats matter in practice:
+One caveat matters in practice: the first compiled step has large startup overhead
 
-- the first compiled step has large startup overhead
-- compile-enabled training is not yet uniformly clean across the whole train/export path; a baseline smoke rerun hit an export-time compile probe failure even though the training step itself compiled successfully
-
-We also evaluated two compile-trained smoke QAT artifacts with the normal eval flow to check whether training with `torch.compile` was obviously hurting metrics. Relative to the existing non-compiled smoke runs, both tested variants were lower:
+We also evaluated compile-trained smoke QAT artifacts with the normal eval flow to check whether training with `torch.compile` was obviously hurting metrics. Relative to the existing non-compiled smoke runs, results were mixed:
 
 | Variant | Split | Non-compiled accuracy | Compile-trained accuracy |
 | --- | --- | ---: | ---: |
+| `fp8_bf16` | smoke | `0.21` | `0.22` |
+| `fp8_fp8` | smoke | `0.25` | `0.21` |
+| `int4_fp8` | smoke | `0.20` | `0.21` |
 | `int8_int8` | smoke | `0.28` | `0.25` |
 | `int4_bf16` | smoke | `0.22` | `0.17` |
 
@@ -352,8 +355,11 @@ On the full `NuminaMath-CoT` split used in this repo (`5000` train, `500` eval),
 | Run | Artifact | Method | Quantization | Accuracy |
 | --- | --- | --- | --- | ---: |
 | baseline bf16 | `baseline-full-baseline-seed17` | SFT baseline | `bf16/bf16` | `0.202` |
+| QAT `fp8_bf16` | `qat-full-fp8_bf16-seed17` | QAT | `FP8/BF16` | `0.216` |
 | QAT `int8_bf16` | `qat-full-int8_bf16-seed17` | QAT | `W8A16` | `0.208` |
+| QAT `fp8_fp8` | `qat-full-fp8_fp8-seed17` | QAT | `W8A8 FP8` | `0.212` |
 | QAT `int8_int8` | `qat-full-int8_int8-seed17` | QAT | `W8A8 INT8` | `0.200` |
+| QAT `int4_fp8` | `qat-full-int4_fp8-seed17` | QAT | `W4A8 FP8` | `0.174` |
 | QAT `int4_bf16` | `qat-full-int4_bf16-seed17` | QAT | `W4A16` | `0.186` |
 | PTQ dynamic `W8A8 INT8` | `model` | PTQ from the full baseline artifact | `W8A8 INT8` | `0.188` |
 
