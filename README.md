@@ -336,12 +336,13 @@ In this repo, compile-enabled training completed for the variants we probed:
 
 The first compiled step has large startup overhead
 
-We also evaluated compile-trained smoke QAT artifacts with the normal eval flow to check whether training with `torch.compile` was obviously hurting metrics. Relative to the existing non-compiled smoke runs, results were mixed:
+We also evaluated compile-trained smoke artifacts with the normal eval flow to check whether training with `torch.compile` was obviously hurting metrics. Where a non-compiled smoke score was available, results were mixed:
 
 | Variant | Split | Non-compiled accuracy | Compile-trained accuracy |
 | --- | --- | ---: | ---: |
-| baseline bf16 | smoke | n/a | `0.25` |
+| baseline bf16 | smoke | `0.22` | `0.25` |
 | `fp8_bf16` | smoke | `0.21` | `0.22` |
+| `int8_bf16` | smoke | n/a | `0.21` |
 | `fp8_fp8` | smoke | `0.25` | `0.21` |
 | `int4_fp8` | smoke | `0.20` | `0.21` |
 | `int8_int8` | smoke | `0.28` | `0.25` |
