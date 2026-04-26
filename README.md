@@ -320,6 +320,23 @@ flowchart TD
     L --> M[final standalone artifact dir]
 ```
 
+## Full-Run Comparison
+
+On the full `NuminaMath-CoT` split used in this repo (`5000` train, `500` eval), the observed accuracies were:
+
+| Run | Artifact | Method | Quantization | Accuracy |
+| --- | --- | --- | --- | ---: |
+| baseline bf16 | `baseline-full-baseline-seed17` | SFT baseline | `bf16/bf16` | `0.202` |
+| QAT `fp8_bf16` | `qat-full-fp8_bf16-seed17` | QAT | `FP8/BF16` | `0.216` |
+| QAT `int8_bf16` | `qat-full-int8_bf16-seed17` | QAT | `W8A16` | `0.208` |
+| QAT `fp8_fp8` | `qat-full-fp8_fp8-seed17` | QAT | `W8A8 FP8` | `0.212` |
+| QAT `int8_int8` | `qat-full-int8_int8-seed17` | QAT | `W8A8 INT8` | `0.200` |
+| QAT `int4_fp8` | `qat-full-int4_fp8-seed17` | QAT | `W4A8 FP8` | `0.174` |
+| QAT `int4_bf16` | `qat-full-int4_bf16-seed17` | QAT | `W4A16` | `0.186` |
+| PTQ dynamic `W8A8 INT8` | `model` | PTQ from the full baseline artifact | `W8A8 INT8` | `0.188` |
+
+The direct QAT-vs-PTQ comparison is the `int8_int8` row: QAT stayed close to the `0.202` baseline at `0.200`, while the corresponding dynamic PTQ `W8A8 INT8` artifact evaluated at `0.188` on the same evaluation flow. That does not prove a universal rule, but it is the practical outcome this repo was built to study.
+
 ## Compile-Enabled Training
 
 The train CLI can run with `torch.compile` through `--compile {disabled,try,required}`.
@@ -349,20 +366,3 @@ We also evaluated compile-trained smoke artifacts with the normal eval flow to c
 | `int4_bf16` | smoke | `0.22` | `0.17` |
 
 That is not enough evidence to claim a universal regression, but it does mean compile-enabled training should currently be treated as experimental rather than a default setting for accuracy-sensitive runs.
-
-## Full-Run Comparison
-
-On the full `NuminaMath-CoT` split used in this repo (`5000` train, `500` eval), the observed accuracies were:
-
-| Run | Artifact | Method | Quantization | Accuracy |
-| --- | --- | --- | --- | ---: |
-| baseline bf16 | `baseline-full-baseline-seed17` | SFT baseline | `bf16/bf16` | `0.202` |
-| QAT `fp8_bf16` | `qat-full-fp8_bf16-seed17` | QAT | `FP8/BF16` | `0.216` |
-| QAT `int8_bf16` | `qat-full-int8_bf16-seed17` | QAT | `W8A16` | `0.208` |
-| QAT `fp8_fp8` | `qat-full-fp8_fp8-seed17` | QAT | `W8A8 FP8` | `0.212` |
-| QAT `int8_int8` | `qat-full-int8_int8-seed17` | QAT | `W8A8 INT8` | `0.200` |
-| QAT `int4_fp8` | `qat-full-int4_fp8-seed17` | QAT | `W4A8 FP8` | `0.174` |
-| QAT `int4_bf16` | `qat-full-int4_bf16-seed17` | QAT | `W4A16` | `0.186` |
-| PTQ dynamic `W8A8 INT8` | `model` | PTQ from the full baseline artifact | `W8A8 INT8` | `0.188` |
-
-The direct QAT-vs-PTQ comparison is the `int8_int8` row: QAT stayed close to the `0.202` baseline at `0.200`, while the corresponding dynamic PTQ `W8A8 INT8` artifact evaluated at `0.188` on the same evaluation flow. That does not prove a universal rule, but it is the practical outcome this repo was built to study.
