@@ -334,12 +334,13 @@ In this repo, compile-enabled training completed for the variants we probed:
 - `int4_fp8`
 - `int4_bf16`
 
-One caveat matters in practice: the first compiled step has large startup overhead
+The first compiled step has large startup overhead
 
 We also evaluated compile-trained smoke QAT artifacts with the normal eval flow to check whether training with `torch.compile` was obviously hurting metrics. Relative to the existing non-compiled smoke runs, results were mixed:
 
 | Variant | Split | Non-compiled accuracy | Compile-trained accuracy |
 | --- | --- | ---: | ---: |
+| baseline bf16 | smoke | n/a | `0.25` |
 | `fp8_bf16` | smoke | `0.21` | `0.22` |
 | `fp8_fp8` | smoke | `0.25` | `0.21` |
 | `int4_fp8` | smoke | `0.20` | `0.21` |
