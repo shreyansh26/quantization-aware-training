@@ -4,6 +4,10 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from qat.config import RuntimeConfig
+from qat.eval.vllm_compat import (
+    VLLM_W4A8_FP8_PATCH_ENV,
+    patch_vllm_w4a8_fp8_scale_view,
+)
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,16 @@ def build_generation_prompts(
 def _prepare_vllm_env(config: RuntimeConfig) -> None:
     _ = config
     os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+    os.environ.setdefault(VLLM_W4A8_FP8_PATCH_ENV, "1")
+    src_path = str(Path(__file__).resolve().parents[2])
+    pythonpath = os.environ.get("PYTHONPATH")
+    if pythonpath:
+        entries = pythonpath.split(os.pathsep)
+        if src_path not in entries:
+            os.environ["PYTHONPATH"] = os.pathsep.join([src_path, *entries])
+    else:
+        os.environ["PYTHONPATH"] = src_path
+    patch_vllm_w4a8_fp8_scale_view()
 
 
 def verify_vllm_loadability(

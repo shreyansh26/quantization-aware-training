@@ -2,6 +2,7 @@ ref_*/
 AGENTS.md
 notes/
 plans/
+ptq_experiments/
 .venv/
 __pycache__/
 .pytest_cache/

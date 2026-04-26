@@ -9,7 +9,7 @@ MODEL_ID = "Qwen/Qwen3-4B"
 MODEL_REVISION = "1cfa9a7208912126459214e8b04321603b3df60c"
 DATASET_ID = "AI-MO/NuminaMath-CoT"
 DATASET_REVISION = "9d8d210c9f6a36c8f3cd84045668c9b7800ef517"
-ARTIFACT_ROOT = Path("/mnt/ssd2/shreyansh/ptq_experiments/artifacts_qat")
+ARTIFACT_ROOT = Path("ptq_experiments/artifacts_qat")
 DEFAULT_METRICS_OUTPUT = ARTIFACT_ROOT / "metrics_numinamath_cot.csv"
 
 SMOKE_TRAIN_SIZE = 500
