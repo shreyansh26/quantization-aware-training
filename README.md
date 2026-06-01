@@ -223,7 +223,7 @@ flowchart LR
     A["float tensor x"] --> B["compute scale / zero_point"]
     B --> C["quantize onto INT8 / INT4 / FP8 grid"]
     C --> D["dequantize back to float (QDQ output)"]
-    D --> E["_ste(original=x, quantized=dq)"]
+    D --> E["_ste(original=x, fake_quantized_float=dq)"]
     E --> F["forward sees dq values"]
     E --> G["backward treats path like identity"]
     G --> H["update original float parameter / activation path"]
@@ -265,7 +265,7 @@ flowchart TD
     G --> H[Backward]
 
     subgraph STE[Straight-through estimator]
-        S1[original + quantized - original detach] --> S2[Forward value equals quantized tensor]
+        S1[original + fake_quantized_float - original detach] --> S2[Forward value equals fake-quantized float tensor]
         S1 --> S3[Backward gradient flows as identity to original tensor]
     end
 
